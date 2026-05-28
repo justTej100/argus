@@ -32,7 +32,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from agents.pipeline import ResearchPipeline
+from agents.Pipeline import ResearchPipeline
 from api.keys import generate_api_key, verify_api_key
 
 app = FastAPI(
