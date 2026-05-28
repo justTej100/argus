@@ -96,6 +96,39 @@ class ResearchPipeline:
         # Returns a grounding score 0.0–1.0 and a list of unverified claims.
         eval_result = await self.eval_agent.run(synthesis, analysis, ai_client)
 
+        # ── Optional: persist to Postgres ────────────────────────────────────
+        # Only runs when DATABASE_URL is set. Wrapped in try/except so a DB
+        # error never breaks the API response — persistence is best-effort.
+        try:
+            from db.client import get_pool, save_search, save_items, save_eval
+            pool = await get_pool()
+            if pool:
+                async with pool.acquire() as conn:
+                    search_id = await save_search(
+                        conn,
+                        query=query,
+                        query_type=query_type,
+                        provider=provider,
+                        brief=synthesis.brief,
+                        grounding_score=eval_result.score,
+                        sources_hit=search.sources_hit,
+                        items_retrieved=len(search.items),
+                        duration_ms=round(search.duration_ms),
+                    )
+                    await save_items(conn, search_id, analysis.top_items)
+                    await save_eval(
+                        conn,
+                        search_id=search_id,
+                        passed=eval_result.passed,
+                        score=eval_result.score,
+                        claims_checked=eval_result.claims_checked,
+                        claims_grounded=eval_result.claims_grounded,
+                        ungrounded_claims=eval_result.ungrounded_claims,
+                        explanation=eval_result.explanation,
+                    )
+        except Exception as db_exc:
+            print(f"[db] Save failed (non-fatal): {db_exc}")
+
         return PipelineResult(
             query=query,
             query_type=query_type,

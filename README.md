@@ -234,7 +234,7 @@ pip install -r requirements.txt
 3. Run the schema:
 
 ```bash
-# Option A — psql
+# Option A — psql (run from the argus/ root)
 psql "postgresql://postgres:[password]@db.[project].supabase.co:5432/postgres" \
   -f backend/db/schema.sql
 
