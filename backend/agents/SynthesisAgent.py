@@ -1,11 +1,17 @@
 """
-SynthesisAgent — generates the final brief using the AI model.
+SynthesisAgent — generates the final answer using an LLM.
 
-Takes the RAG context window from AnalysisAgent and produces:
-- Topic mode: trend brief with signals, sentiment, key voices
-- Person mode: OSINT dossier with activity, footprint, summary
+This is where the "G" in RAG happens: Generation.
 
-Supports DeepSeek and Gemini interchangeably via the shared client.
+The agent receives the context window built by AnalysisAgent (up to 15
+real posts formatted as text) and asks the LLM to answer the user's
+question using only that content. The "only use the provided sources"
+rule in the system prompt is what keeps the LLM from hallucinating.
+
+Multi-turn chat: when conversation_history is provided, prior turns are
+prepended to the LLM messages array. The model sees the full conversation
+and can answer follow-ups like "expand on point 2" or "which of those
+had the most upvotes?" coherently.
 """
 
 from __future__ import annotations
@@ -20,13 +26,17 @@ from agents.AnalysisAgent import AnalysisResult
 class SynthesisResult:
     query: str
     query_type: str
-    brief: str
-    model_used: str
-    provider: str
-    sources_cited: list[str]
+    brief: str           # the AI-generated answer text
+    model_used: str      # e.g. "deepseek-chat"
+    provider: str        # "deepseek" or "gemini"
+    sources_cited: list[str]   # which source platforms were in the context
 
 
 class SynthesisAgent:
+
+    # The system prompt defines the AI's role and the rules it must follow.
+    # "Only use facts from the provided sources" is the grounding constraint —
+    # it tells the LLM to treat the context window as its only allowed knowledge.
 
     TOPIC_SYSTEM = """You are a sharp, conversational research assistant. You read real posts from Reddit,
 HackerNews, and GitHub and give the user a clear, engaging summary of what people are actually saying.
@@ -55,8 +65,14 @@ Rules:
         ai_client: AIClient,
         conversation_history: list[dict] | None = None,
     ) -> SynthesisResult:
+        # Pick the right system prompt based on whether this is a topic or person query.
         system = self.PERSON_SYSTEM if query_type == "person" else self.TOPIC_SYSTEM
 
+        # The user prompt contains two things:
+        #   1. The user's actual question.
+        #   2. The context window — all the source documents the LLM is allowed to use.
+        # By putting the sources IN the prompt, we're doing the "A" in RAG:
+        # Augmenting the generation with Retrieved content.
         user_prompt = f"""User question: {analysis.query}
 
 Fresh data retrieved from Reddit, HackerNews, GitHub ({len(analysis.top_items)} posts/items):
@@ -68,11 +84,15 @@ Answer the user's question based solely on the above sources."""
             ai_client,
             system=system,
             user=user_prompt,
-            temperature=0.3,
+            temperature=0.3,   # slightly higher than 0 for a natural, varied tone
             max_tokens=2000,
+            # Conversation history slots in between the system prompt and this
+            # user message. The LLM sees: [system] → [prior turns] → [current query + sources].
             extra_messages=conversation_history,
         )
 
+        # Record which source platforms appeared in the context — useful for
+        # the frontend to show "answered using reddit, hackernews" etc.
         sources_cited = list({item.source for item in analysis.top_items})
 
         return SynthesisResult(

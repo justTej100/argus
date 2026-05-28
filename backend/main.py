@@ -1,6 +1,16 @@
 """
-Argus — FastAPI app.
-Docs auto-generated at /docs once running.
+Argus — FastAPI entry point.
+
+This file only does two things:
+  1. Defines the HTTP routes (what URLs the API responds to).
+  2. Converts between HTTP request/response shapes and the pipeline's internal types.
+
+All the real work happens in agents/pipeline.py. Keeping routes thin like this
+makes it easy to swap the transport layer (e.g. add websockets, gRPC) later.
+
+Run with:
+    cd backend && uvicorn main:app --reload
+Swagger UI (interactive docs): http://localhost:8000/docs
 """
 
 from __future__ import annotations
@@ -12,7 +22,10 @@ from typing import Literal
 
 from dotenv import load_dotenv
 
-# Load the single root .env (argus/.env) regardless of where uvicorn is invoked from.
+# Path(__file__) is this file (backend/main.py).
+# .parent      → backend/
+# .parent.parent → argus/   ← where the single .env lives
+# This means you can run uvicorn from any directory and it still finds the .env.
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 from fastapi import Depends, FastAPI
@@ -33,6 +46,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Allow all origins in dev so the Next.js frontend (localhost:3000) can call
+# the backend (localhost:8000) without browser CORS errors.
+# In production, replace "*" with your actual frontend domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,21 +56,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Create the pipeline once at startup, not on every request.
+# The agents inside it (SearchAgent, AnalysisAgent, etc.) are stateless,
+# so a single shared instance is safe and avoids re-initialization overhead.
 pipeline = ResearchPipeline()
 
 
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
+# Pydantic models do two things here:
+#   1. Validate incoming JSON — FastAPI returns a 422 automatically if the
+#      shape doesn't match, so we don't write any manual validation code.
+#   2. Serialize outgoing data — the response_model= on each route uses these
+#      to control exactly which fields the client sees.
 
 class SearchRequest(BaseModel):
     query: str
     type: Literal["topic", "person"] = "topic"
     provider: Literal["deepseek", "gemini"] = "deepseek"
-    sources: list[str] | None = None
+    sources: list[str] | None = None  # None = use all default sources
 
     model_config = {
         "json_schema_extra": {
+            # These show up as example payloads in the /docs Swagger UI.
             "examples": [
                 {
                     "query": "bitcoin ETF approval",
@@ -73,11 +98,16 @@ class SearchRequest(BaseModel):
 
 
 class ChatMessage(BaseModel):
+    # Same shape as the OpenAI messages array — role + content.
+    # This makes it easy to swap in other LLM providers later.
     role: Literal["user", "assistant"]
     content: str
 
 
 class ChatRequest(BaseModel):
+    # The frontend sends the ENTIRE conversation history on every request.
+    # The backend doesn't store state — the client owns the history.
+    # This is the same pattern OpenAI's chat API uses.
     messages: list[ChatMessage]
     provider: Literal["deepseek", "gemini"] = "deepseek"
     sources: list[str] | None = None
@@ -92,6 +122,8 @@ class ChatRequest(BaseModel):
                     "provider": "deepseek",
                 },
                 {
+                    # Multi-turn example: the second user message is a follow-up.
+                    # The prior assistant turn gives the LLM context to answer it.
                     "messages": [
                         {"role": "user", "content": "Latest AI coding tools discussion"},
                         {"role": "assistant", "content": "People on HN are talking about..."},
@@ -105,15 +137,21 @@ class ChatRequest(BaseModel):
 
 
 class EvalResponse(BaseModel):
-    passed: bool
+    # Grounding check results from EvalAgent.
+    # `score` is 0.0–1.0: what fraction of the AI's factual claims
+    # could be verified against the retrieved source documents.
+    passed: bool             # true if score >= 0.75
     score: float
     claims_checked: int
     claims_grounded: int
-    ungrounded_claims: list[str]
+    ungrounded_claims: list[str]   # the specific claims that couldn't be verified
     explanation: str
 
 
 class SearchResponse(BaseModel):
+    # Shared response shape for both /search and /chat.
+    # `sources` is list[dict] (untyped) so both the old 4-field shape
+    # and the new expanded shape (with body, author, etc.) both validate.
     query: str
     type: str
     brief: str
@@ -135,15 +173,17 @@ class KeyResponse(BaseModel):
 
 @app.get("/", tags=["Meta"])
 def root():
+    # Simple directory — useful when someone hits the API root in a browser.
     return {
         "name": "Argus API",
         "version": "1.0.0",
         "demo_key": "demo-key-argus",
         "docs": "/docs",
         "endpoints": {
-            "POST /search": "Run the full agentic RAG pipeline",
+            "POST /chat":          "Multi-turn chat grounded in real-time scraped data",
+            "POST /search":        "Single-query RAG pipeline (original endpoint)",
             "POST /keys/generate": "Generate an API key",
-            "GET /health": "Health check",
+            "GET /health":         "Health check",
         },
     }
 
@@ -156,10 +196,13 @@ def health():
 @app.post("/search", response_model=SearchResponse, tags=["Research"])
 async def search(
     body: SearchRequest,
+    # Depends(verify_api_key) runs verify_api_key() before this function.
+    # If the key is invalid or rate-limited it raises an HTTP exception and
+    # this handler never runs. If it passes, key_data is returned and injected here.
     key_data: dict = Depends(verify_api_key),
 ):
     """
-    Run the full research pipeline:
+    Single-turn research pipeline:
 
     1. **SearchAgent** fans out to Reddit, HN, GitHub, Exa, etc. in parallel
     2. **AnalysisAgent** embeds results + ranks by semantic similarity (RAG)
@@ -178,8 +221,11 @@ async def search(
         query=result.query,
         type=result.query_type,
         brief=result.brief,
+        # vars() turns the EvalResult dataclass into a plain dict so we can
+        # unpack it into the EvalResponse Pydantic model.
         eval=EvalResponse(**vars(result.eval)),
         sources=result.sources,
+        # Merge the pipeline's meta dict with the rate-limit info from the key check.
         meta={**result.meta, "rate_limit": key_data},
     )
 
@@ -190,20 +236,23 @@ async def chat(
     key_data: dict = Depends(verify_api_key),
 ):
     """
-    Multi-turn chat endpoint. Send the full conversation history and get back
-    an AI response grounded in freshly scraped Reddit, HN, and GitHub data.
+    Multi-turn chat endpoint.
 
-    The last `user` message is used as the search query. Prior messages are
-    injected into the synthesis prompt so follow-up questions work naturally.
+    Extracts the latest user message as the search query, runs the full RAG
+    pipeline against live data, then feeds the prior conversation turns into
+    the LLM so follow-up questions are answered in context.
     """
     user_messages = [m for m in body.messages if m.role == "user"]
     if not user_messages:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
+    # The most recent user message drives the data retrieval.
     query = user_messages[-1].content
 
-    # All messages except the final user message become conversation history
+    # Everything before the final user message is "history" — it gets prepended
+    # to the LLM prompt so the model knows what was said earlier in the chat.
+    # If this is the first message, history is None and the pipeline runs normally.
     history = (
         [{"role": m.role, "content": m.content} for m in body.messages[:-1]]
         if len(body.messages) > 1

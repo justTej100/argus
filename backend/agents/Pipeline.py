@@ -1,9 +1,19 @@
 """
-pipeline.py — orchestrates the 4 agents in sequence.
+Pipeline.py — orchestrates the 4 agents in a fixed sequence.
 
-SearchAgent → AnalysisAgent → SynthesisAgent → EvalAgent
+This is the only file that main.py needs to import. It wires the agents
+together and owns the data flow between them:
 
-This is the only file that api/main.py needs to import.
+    SearchAgent → AnalysisAgent → SynthesisAgent → EvalAgent
+
+Each agent has a single responsibility and a clean input/output contract.
+That makes them easy to test in isolation, swap out, or run in different
+orders if you want to experiment.
+
+Why a ResearchPipeline class instead of a plain function?
+  The agents are stateless, but having a class lets you inject different
+  agent implementations (e.g. a mock SearchAgent in tests) without
+  touching the orchestration logic.
 """
 
 from __future__ import annotations
@@ -19,16 +29,23 @@ from agents.EvalAgent import EvalAgent, EvalResult
 
 @dataclass
 class PipelineResult:
+    """
+    The final output of the full pipeline — everything the API route needs
+    to build a response. Keeping this as a dataclass (not a Pydantic model)
+    means the pipeline is independent of FastAPI.
+    """
     query: str
     query_type: str
-    brief: str
-    eval: EvalResult
-    sources: list[dict]
+    brief: str          # the AI-generated answer
+    eval: EvalResult    # grounding check results
+    sources: list[dict] # the actual posts the AI read (shown in the UI)
     meta: dict[str, Any]
 
 
 class ResearchPipeline:
     def __init__(self) -> None:
+        # Each agent is instantiated once and reused across all requests.
+        # They're all stateless so this is safe.
         self.search_agent = SearchAgent()
         self.analysis_agent = AnalysisAgent()
         self.synthesis_agent = SynthesisAgent()
@@ -42,21 +59,41 @@ class ResearchPipeline:
         sources: list[str] | None = None,
         conversation_history: list[dict] | None = None,
     ) -> PipelineResult:
+        """
+        Run the full 4-agent pipeline and return the combined result.
+
+        conversation_history: prior chat turns from the /chat endpoint.
+          Passed through to SynthesisAgent so the LLM can answer follow-up
+          questions with awareness of what was said earlier.
+        """
+        # Resolve the AI client once here, then pass it to whichever agents
+        # need it (Synthesis and Eval). This way agents don't need to know
+        # about the provider selection logic.
         from ai.clients import get_client
         ai_client = get_client(provider)  # type: ignore
 
-        # Stage 1 — Search
+        # ── Stage 1: Search ───────────────────────────────────────────────
+        # Fan out to Reddit, HN, GitHub, etc. in parallel.
+        # Returns a flat list of SourceItems — same shape regardless of source.
         search = await self.search_agent.run(query, query_type, sources)
 
-        # Stage 2 — Embed + RAG retrieval
+        # ── Stage 2: RAG retrieval ────────────────────────────────────────
+        # Embed the query and every search result, then rank by cosine
+        # similarity. Returns the top-15 most relevant items as a context window.
         analysis = await self.analysis_agent.run(search)
 
-        # Stage 3 — Synthesize (with optional conversation history for multi-turn chat)
+        # ── Stage 3: Synthesis ────────────────────────────────────────────
+        # Feed the context window to the LLM and get a grounded answer.
+        # If conversation_history is provided, it's prepended to the LLM
+        # messages so follow-up questions work naturally.
         synthesis = await self.synthesis_agent.run(
             analysis, query_type, ai_client, conversation_history
         )
 
-        # Stage 4 — Eval
+        # ── Stage 4: Eval ─────────────────────────────────────────────────
+        # A second LLM call extracts every factual claim from the brief and
+        # checks whether each one can be found in the source documents.
+        # Returns a grounding score 0.0–1.0 and a list of unverified claims.
         eval_result = await self.eval_agent.run(synthesis, analysis, ai_client)
 
         return PipelineResult(
@@ -64,28 +101,30 @@ class ResearchPipeline:
             query_type=query_type,
             brief=synthesis.brief,
             eval=eval_result,
+            # Expand the full source fields so the frontend can display
+            # the actual post content, not just the title and URL.
             sources=[
                 {
-                    "source": item.source,
-                    "title": item.title,
-                    "url": item.url,
-                    "body": item.body,
-                    "author": item.author,
-                    "container": item.container,
+                    "source":       item.source,
+                    "title":        item.title,
+                    "url":          item.url,
+                    "body":         item.body,
+                    "author":       item.author,
+                    "container":    item.container,    # subreddit, GitHub org, etc.
                     "published_at": item.published_at,
-                    "engagement": item.engagement,
+                    "engagement":   item.engagement,
                 }
                 for item in analysis.top_items[:20]
             ],
             meta={
-                "provider": provider,
-                "model": ai_client.model,
-                "sources_hit": search.sources_hit,
-                "items_retrieved": len(search.items),
-                "items_in_context": len(analysis.top_items),
+                "provider":          provider,
+                "model":             ai_client.model,
+                "sources_hit":       search.sources_hit,   # which scrapers returned data
+                "items_retrieved":   len(search.items),    # total before RAG filtering
+                "items_in_context":  len(analysis.top_items),  # top-K sent to LLM
                 "search_duration_ms": round(search.duration_ms),
-                "token_estimate": analysis.token_estimate,
-                "grounding_score": eval_result.score,
-                "errors": search.errors,
+                "token_estimate":    analysis.token_estimate,
+                "grounding_score":   eval_result.score,
+                "errors":            search.errors,    # per-source scraper errors, if any
             },
         )
