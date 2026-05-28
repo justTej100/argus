@@ -6,18 +6,18 @@ Docs auto-generated at /docs once running.
 from __future__ import annotations
 
 import os
-import sys
 import time
+from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-load_dotenv()
+
+# Load the single root .env (argus/.env) regardless of where uvicorn is invoked from.
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agents.pipeline import ResearchPipeline
 from api.keys import generate_api_key, verify_api_key

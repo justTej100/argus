@@ -14,35 +14,33 @@ Ask anything. Argus scrapes the internet in real time, ranks what's most relevan
 
 ## Quick Start
 
-**You need:** Python 3.12+, Node 18+, a DeepSeek or Gemini API key (see below).
+**You need:** Python 3.12+, Node 18+.
 
 ```bash
 # 1. Clone
 git clone https://github.com/yourusername/argus
 cd argus
 
-# 2. Backend
+# 2. Create your .env (one file, used by both backend and frontend)
+cp .env.example .env
+# Open .env and add at least one AI key (DEEPSEEK_API_KEY or GEMINI_API_KEY)
+
+# 3. Backend
 cd backend
 pip install -r requirements.txt
-cp ../.env.example ../.env        # then fill in your keys (see .env.example)
-uvicorn main:app --reload         # → http://localhost:8000
+uvicorn main:app --reload   # → http://localhost:8000
 
-# 3. Frontend (new terminal)
-cd ../frontend
+# 4. Frontend (new terminal, from the argus/ root)
+cd frontend
 npm install
-cp .env.local.example .env.local  # NEXT_PUBLIC_API_URL=http://localhost:8000
-npm run dev                        # → http://localhost:3000
+npm run dev                 # → http://localhost:3000
 ```
 
 Open [http://localhost:3000](http://localhost:3000) — the chat UI is the homepage.
 
-**Minimum `.env` to work:**
-```bash
-DEEPSEEK_API_KEY=sk-...       # or GEMINI_API_KEY — one of the two is required
-# DATABASE_URL is optional; embeddings fall back to in-memory if not set
-```
+**Preview mode (zero keys):** The app runs without any API keys — scraping and RAG still work, but AI synthesis returns a placeholder message instead of a real answer. Add `DEEPSEEK_API_KEY` or `GEMINI_API_KEY` to `.env` to unlock full responses.
 
-Reddit, HackerNews, and GitHub scraping works with zero keys. That's enough to run the full chat pipeline.
+All variables are documented in `.env.example`. `DATABASE_URL`, `GITHUB_TOKEN`, `EXA_API_KEY`, and `SCRAPECREATORS_API_KEY` are all optional.
 
 ---
 
@@ -247,8 +245,10 @@ psql "postgresql://postgres:[password]@db.[project].supabase.co:5432/postgres" \
 ### Step 4 — Configure environment
 
 ```bash
+# From the argus/ root (if you haven't already)
 cp .env.example .env
-# fill in DEEPSEEK_API_KEY and DATABASE_URL at minimum
+# Fill in DEEPSEEK_API_KEY or GEMINI_API_KEY at minimum.
+# Everything else is optional.
 ```
 
 ### Step 5 — Run
@@ -282,14 +282,13 @@ npm install
 
 ### Step 2 — Environment
 
-```bash
-cp .env.local.example .env.local
-```
+No separate frontend env file needed. `next.config.ts` reads the root `argus/.env`
+automatically. If you need to override just the frontend vars, you can add them to
+the root `.env`:
 
 ```bash
-# .env.local
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_DEMO_KEY=demo-key-argus
+NEXT_PUBLIC_API_URL=http://localhost:8000   # default
+NEXT_PUBLIC_DEMO_KEY=demo-key-argus         # default
 ```
 
 ### Step 3 — Run
