@@ -153,7 +153,7 @@ POST /chat  (or /search for single-turn)
 | **pgvector** | `db/schema.sql` + `db_client.py` | Vector search inside Postgres, `ivfflat` index |
 | **LLM-as-judge evals** | `EvalAgent` | Second-pass grounding check, scores every output |
 | **Switchable model providers** | `clients.py` | DeepSeek + Gemini both via OpenAI-compatible endpoint |
-| **API key auth + rate limiting** | `keys.py` | Redis sliding window, per-plan daily limits |
+| **API key auth + rate limiting** | `api/keys.py` | In-memory sliding window (Redis upgrade planned) |
 
 ---
 
@@ -180,15 +180,21 @@ argus/
 └── backend/                          ← FastAPI (Python)
     ├── requirements.txt
     ├── main.py                       ← FastAPI routes (POST /chat, POST /search, etc.)
-    ├── clients.py                    ← DeepSeek + Gemini clients + embed()
-    ├── sources.py                    ← Reddit, HN, GitHub, Exa, ScrapeCreators scrapers
-    ├── db_client.py                  ← asyncpg helpers + semantic_search()
-    └── agents/
-        ├── Pipeline.py               ← orchestrates the 4 agents
-        ├── SearchAgent.py            ← parallel scraper fan-out
-        ├── AnalysisAgent.py          ← embed + RAG ranking
-        ├── SynthesisAgent.py         ← LLM synthesis with conversation history
-        └── EvalAgent.py              ← LLM-as-judge grounding check
+    ├── agents/
+    │   ├── Pipeline.py               ← orchestrates the 4 agents
+    │   ├── SearchAgent.py            ← parallel scraper fan-out
+    │   ├── AnalysisAgent.py          ← embed + RAG ranking
+    │   ├── SynthesisAgent.py         ← LLM synthesis with conversation history
+    │   └── EvalAgent.py              ← LLM-as-judge grounding check
+    ├── ai/
+    │   └── clients.py                ← DeepSeek + Gemini clients + embed()
+    ├── scrapers/
+    │   └── sources.py                ← Reddit, HN, GitHub, Exa, ScrapeCreators scrapers
+    ├── api/
+    │   └── keys.py                   ← API key generation + in-memory rate limiting
+    └── db/
+        ├── schema.sql                ← Postgres + pgvector table definitions
+        └── client.py                 ← asyncpg helpers, save pipeline results
 ```
 
 ---
@@ -430,15 +436,33 @@ curl -X POST "http://localhost:8000/keys/generate?plan=free"
 
 ---
 
-## Roadmap
+## Completed
 
-- [ ] Persist embeddings to Postgres (semantic search across history)
-- [ ] Redis rate limiting (replace in-memory fallback)
-- [ ] X/Twitter via ScrapeCreators
-- [ ] Streaming `POST /chat/stream` SSE endpoint + frontend streaming text
-- [ ] Persist chat sessions to Postgres (load past conversations)
-- [ ] Stripe for API key billing
-- [ ] Agent status websocket — real-time pipeline stage updates in the UI
+- [x] 4-agent RAG pipeline (Search → Analysis → Synthesis → Eval)
+- [x] Multi-turn `POST /chat` endpoint with conversation history
+- [x] Single-turn `POST /search` endpoint (original, still available)
+- [x] DeepSeek + Gemini support, hot-swappable via `provider=`
+- [x] Parallel scraping — Reddit, HackerNews, GitHub, Exa, ScrapeCreators hit simultaneously
+- [x] Embedding-based semantic ranking (cosine similarity, top-15 context window)
+- [x] EvalAgent grounding check — LLM-as-judge scores every response 0.0–1.0
+- [x] Source cards with full post data (body excerpt, container, author, published_at)
+- [x] PostgreSQL + pgvector persistence (optional — app runs without it)
+- [x] API key generation + in-memory rate limiting with per-plan daily limits
+- [x] Preview mode — runs with zero API keys (scraping + RAG work, AI returns placeholder)
+- [x] Single root `.env` used by both backend and frontend
+- [x] ChatGPT-style chat UI — multi-turn conversation, source cards, grounding badge
+
+---
+
+## Up Next
+
+- [ ] **Redis rate limiting** — replace the in-memory dict in `api/keys.py` with a Redis-backed sliding window so limits survive server restarts and work across multiple instances. Railway provides Redis as a one-click add-on
+- [ ] Persist embeddings to Postgres (semantic search over conversation history)
+- [ ] Streaming `POST /chat/stream` SSE endpoint + live-updating text in the frontend
+- [ ] Persist chat sessions to Postgres (reload past conversations on refresh)
+- [ ] X/Twitter scraper via ScrapeCreators
+- [ ] Agent status websocket — push real-time pipeline stage progress to the UI
+- [ ] Stripe integration for API key billing
 
 ---
 
