@@ -12,6 +12,40 @@ Ask anything. Argus scrapes the internet in real time, ranks what's most relevan
 
 ---
 
+## Quick Start
+
+**You need:** Python 3.12+, Node 18+, a DeepSeek or Gemini API key (see below).
+
+```bash
+# 1. Clone
+git clone https://github.com/yourusername/argus
+cd argus
+
+# 2. Backend
+cd backend
+pip install -r requirements.txt
+cp ../.env.example ../.env        # then fill in your keys (see .env.example)
+uvicorn main:app --reload         # → http://localhost:8000
+
+# 3. Frontend (new terminal)
+cd ../frontend
+npm install
+cp .env.local.example .env.local  # NEXT_PUBLIC_API_URL=http://localhost:8000
+npm run dev                        # → http://localhost:3000
+```
+
+Open [http://localhost:3000](http://localhost:3000) — the chat UI is the homepage.
+
+**Minimum `.env` to work:**
+```bash
+DEEPSEEK_API_KEY=sk-...       # or GEMINI_API_KEY — one of the two is required
+# DATABASE_URL is optional; embeddings fall back to in-memory if not set
+```
+
+Reddit, HackerNews, and GitHub scraping works with zero keys. That's enough to run the full chat pipeline.
+
+---
+
 ## What it does
 
 Type a question. Argus fans out to Reddit, HackerNews, and GitHub simultaneously, embeds and ranks the results by semantic relevance, then has DeepSeek or Gemini answer your question based solely on what it found. The UI shows you every source post — title, subreddit, upvotes, body excerpt, and a direct link — right below the answer.
