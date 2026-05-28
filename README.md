@@ -1,8 +1,8 @@
 # Argus
 
-**Agentic RAG research pipeline — OSINT + trend analysis across Reddit, HN, GitHub, and the web.**
+**ChatGPT for fresh ideas — multi-turn chat grounded in real posts from Reddit, HN, and GitHub.**
 
-One search. Every public signal about a person or topic retrieved in parallel, embedded for semantic search, synthesized by AI, and grounding-checked before it reaches you.
+Ask anything. Argus scrapes the internet in real time, ranks what's most relevant using embeddings, and gives you an AI answer built entirely from actual posts — not its training data. Every response shows you exactly which posts it read.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-58a6ff?style=flat-square)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square)]()
@@ -14,30 +14,48 @@ One search. Every public signal about a person or topic retrieved in parallel, e
 
 ## What it does
 
-Search a topic or person. Get back an AI-generated brief grounded in real data from Reddit, HackerNews, GitHub, and the web — with a grounding score telling you how reliable the output is.
+Type a question. Argus fans out to Reddit, HackerNews, and GitHub simultaneously, embeds and ranks the results by semantic relevance, then has DeepSeek or Gemini answer your question based solely on what it found. The UI shows you every source post — title, subreddit, upvotes, body excerpt, and a direct link — right below the answer.
+
+Ask a follow-up. The full conversation history is passed back to the pipeline so the AI can answer in context, while every reply still pulls fresh data.
 
 ```bash
-curl -X POST https://api.argus.dev/search \
+curl -X POST https://api.argus.dev/chat \
   -H "x-api-key: demo-key-argus" \
   -H "Content-Type: application/json" \
-  -d '{"query": "Vitalik Buterin", "type": "person", "provider": "deepseek"}'
+  -d '{
+    "messages": [{"role": "user", "content": "What are devs saying about AI coding tools?"}],
+    "provider": "deepseek"
+  }'
 ```
 
 ```json
 {
-  "brief": "Vitalik Buterin has been most active on GitHub and Reddit...",
+  "brief": "On HN, the most upvoted thread this week argues that Cursor has changed...",
   "eval": {
     "passed": true,
-    "score": 0.91,
-    "claims_checked": 14,
-    "claims_grounded": 13,
+    "score": 0.93,
+    "claims_checked": 11,
+    "claims_grounded": 10,
     "ungrounded_claims": []
   },
-  "sources": [...],
+  "sources": [
+    {
+      "source": "hackernews",
+      "title": "Cursor is the first IDE that actually...",
+      "url": "https://news.ycombinator.com/item?id=...",
+      "body": "I've been using it for 3 months and the tab completion alone...",
+      "container": "HackerNews",
+      "published_at": "1748200000",
+      "engagement": { "points": 847, "comments": 312 }
+    }
+  ],
   "meta": {
-    "items_retrieved": 47,
-    "grounding_score": 0.91,
-    "search_duration_ms": 1240
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "items_retrieved": 43,
+    "items_in_context": 15,
+    "grounding_score": 0.93,
+    "search_duration_ms": 1190
   }
 }
 ```
@@ -47,8 +65,9 @@ curl -X POST https://api.argus.dev/search \
 ## Architecture
 
 ```
-POST /search
+POST /chat  (or /search for single-turn)
      │
+     │  messages array (full conversation history)
      ▼
 ┌─────────────────────────────────────────────────────┐
 │  SearchAgent  (parallel fan-out)                    │
@@ -68,9 +87,10 @@ POST /search
 ┌─────────────────────────────────────────────────────┐
 │  SynthesisAgent                                     │
 │  DeepSeek or Gemini — hot-swappable via provider=   │
-│  Generates grounded brief from context only         │
+│  Conversation history injected for multi-turn chat  │
+│  Answers from context only — no hallucination       │
 └─────────────────┬───────────────────────────────────┘
-                  │  brief text
+                  │  answer text
                   ▼
 ┌─────────────────────────────────────────────────────┐
 │  EvalAgent  (LLM-as-judge grounding check)          │
@@ -85,7 +105,7 @@ POST /search
 |-------|-------------|-------------|
 | `SearchAgent` | Fans out to all scrapers simultaneously | `asyncio.gather` |
 | `AnalysisAgent` | Embeds + ranks by semantic similarity | RAG / cosine similarity |
-| `SynthesisAgent` | Generates brief via LLM | Prompt engineering |
+| `SynthesisAgent` | Generates answer via LLM with conversation context | Prompt engineering + multi-turn |
 | `EvalAgent` | Grounding check on the output | LLM-as-judge evals |
 
 ---
@@ -94,13 +114,14 @@ POST /search
 
 | Concept | Where | Why it matters |
 |---------|-------|----------------|
-| **Agentic systems** | `agents/pipeline.py` | 4 single-responsibility agents, composed into a pipeline |
-| **RAG** | `AnalysisAgent` | Retrieved context injected into prompt — no hallucination from memory |
-| **Embeddings + semantic search** | `ai/clients.py` + pgvector | Cosine similarity ranking, not keyword matching |
-| **pgvector** | `db/schema.sql` + `db/client.py` | Vector search inside Postgres, `ivfflat` index |
+| **Agentic systems** | `agents/Pipeline.py` | 4 single-responsibility agents, composed into a pipeline |
+| **RAG** | `AnalysisAgent` | Retrieved context injected into prompt — answers come from real posts, not model memory |
+| **Multi-turn RAG chat** | `POST /chat` + `SynthesisAgent` | Conversation history threaded through the pipeline so follow-ups work |
+| **Embeddings + semantic search** | `clients.py` + pgvector | Cosine similarity ranking, not keyword matching |
+| **pgvector** | `db/schema.sql` + `db_client.py` | Vector search inside Postgres, `ivfflat` index |
 | **LLM-as-judge evals** | `EvalAgent` | Second-pass grounding check, scores every output |
-| **Switchable model providers** | `ai/clients.py` | DeepSeek + Gemini both via OpenAI-compatible endpoint |
-| **API key auth + rate limiting** | `api/keys.py` | Redis sliding window, per-plan daily limits |
+| **Switchable model providers** | `clients.py` | DeepSeek + Gemini both via OpenAI-compatible endpoint |
+| **API key auth + rate limiting** | `keys.py` | Redis sliding window, per-plan daily limits |
 
 ---
 
@@ -114,37 +135,28 @@ argus/
 │
 ├── frontend/                         ← Next.js 14 (App Router)
 │   ├── package.json
-│   ├── next.config.js
+│   ├── next.config.ts
 │   ├── tailwind.config.js
-│   └── src/
-│       └── app/
-│           ├── layout.tsx            ← root layout, fonts, nav
-│           ├── page.tsx              ← landing page (marketing + live demo)
-│           ├── demo/
-│           │   └── page.tsx          ← full demo UI (search, results, sources)
-│           ├── docs/
-│           │   └── page.tsx          ← API docs + code examples
-│           └── components/
-│               ├── SearchBar.tsx     ← query input + type/model toggles
-│               ├── BriefCard.tsx     ← AI brief display
-│               ├── SourcesList.tsx   ← sources with engagement stats
-│               ├── GroundingBadge.tsx← score badge (green/yellow/red)
-│               └── AgentStatus.tsx   ← live pipeline stage indicator
+│   └── app/
+│       ├── layout.tsx                ← root layout, fonts, nav
+│       ├── page.tsx                  ← chat UI (sidebar, bubbles, sources strip)
+│       ├── demo/
+│       │   └── page.tsx              ← single-query demo with pipeline visualizer
+│       └── docs/
+│           └── page.tsx              ← API reference + code examples
 │
 └── backend/                          ← FastAPI (Python)
     ├── requirements.txt
-    ├── agents/
-    │   └── pipeline.py               ← SearchAgent, AnalysisAgent, SynthesisAgent, EvalAgent
-    ├── ai/
-    │   └── clients.py                ← DeepSeek + Gemini clients + embed()
-    ├── api/
-    │   ├── main.py                   ← FastAPI routes
-    │   └── keys.py                   ← API key auth + Redis rate limiting
-    ├── db/
-    │   ├── schema.sql                ← Postgres + pgvector schema
-    │   └── client.py                 ← asyncpg helpers + semantic_search()
-    └── scrapers/
-        └── sources.py                ← Reddit, HN, GitHub, Exa, ScrapeCreators
+    ├── main.py                       ← FastAPI routes (POST /chat, POST /search, etc.)
+    ├── clients.py                    ← DeepSeek + Gemini clients + embed()
+    ├── sources.py                    ← Reddit, HN, GitHub, Exa, ScrapeCreators scrapers
+    ├── db_client.py                  ← asyncpg helpers + semantic_search()
+    └── agents/
+        ├── Pipeline.py               ← orchestrates the 4 agents
+        ├── SearchAgent.py            ← parallel scraper fan-out
+        ├── AnalysisAgent.py          ← embed + RAG ranking
+        ├── SynthesisAgent.py         ← LLM synthesis with conversation history
+        └── EvalAgent.py              ← LLM-as-judge grounding check
 ```
 
 ---
@@ -153,11 +165,11 @@ argus/
 
 | Source | Needs key? | What you get |
 |--------|-----------|-------------|
-| Reddit | ❌ free | Posts, upvotes, comments |
-| HackerNews | ❌ free | Stories, points, discussions |
-| GitHub | ❌ free (token = higher limits) | Repos, stars, commit activity |
-| Exa | ✅ `EXA_API_KEY` (1k free/month) | Semantic web search |
-| TikTok/Instagram/X | ✅ `SCRAPECREATORS_API_KEY` (100 free) | Social posts + engagement |
+| Reddit | free | Posts, upvotes, comments, subreddit |
+| HackerNews | free | Stories, points, discussions |
+| GitHub | free (token = higher limits) | Repos, stars, commit activity |
+| Exa | `EXA_API_KEY` (1k free/month) | Semantic web search |
+| TikTok/Instagram/X | `SCRAPECREATORS_API_KEY` (100 free) | Social posts + engagement |
 
 Reddit, HN, and GitHub work with zero configuration.
 
@@ -173,13 +185,15 @@ cd argus/backend
 pip install -r requirements.txt
 ```
 
-### Step 2 — Get a DeepSeek API key
+### Step 2 — Get an AI API key
 
+**DeepSeek** (recommended — cheap and fast):
 1. Go to [platform.deepseek.com](https://platform.deepseek.com)
 2. Sign up → API Keys → Create
 3. Add $5 credit (you'll use maybe $0.10 testing this)
 
-Or use Gemini — free tier available at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+**Gemini** (free tier):
+- [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — 1M tokens/day free
 
 ### Step 3 — Set up Supabase (Postgres + pgvector)
 
@@ -203,22 +217,22 @@ cp .env.example .env
 # fill in DEEPSEEK_API_KEY and DATABASE_URL at minimum
 ```
 
-### Step 5 — Run the backend
+### Step 5 — Run
 
 ```bash
 cd backend
-uvicorn api.main:app --reload
+uvicorn main:app --reload
 ```
 
 Open [http://localhost:8000/docs](http://localhost:8000/docs) — Swagger UI with every endpoint.
 
-### Step 6 — Test it
+### Step 6 — Test the chat endpoint
 
 ```bash
-curl -X POST http://localhost:8000/search \
+curl -X POST http://localhost:8000/chat \
   -H "x-api-key: demo-key-argus" \
   -H "Content-Type: application/json" \
-  -d '{"query": "bitcoin ETF", "type": "topic", "provider": "deepseek"}'
+  -d '{"messages": [{"role": "user", "content": "what are people saying about rust?"}], "provider": "deepseek"}'
 ```
 
 ---
@@ -240,7 +254,7 @@ cp .env.local.example .env.local
 
 ```bash
 # .env.local
-NEXT_PUBLIC_API_URL=http://localhost:8000   # local dev
+NEXT_PUBLIC_API_URL=http://localhost:8000
 NEXT_PUBLIC_DEMO_KEY=demo-key-argus
 ```
 
@@ -256,9 +270,9 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Route | What it is |
 |-------|-----------|
-| `/` | Landing page — hero, live demo widget, feature breakdown, "Get API key" CTA |
-| `/demo` | Full demo UI — search bar, agent status, brief output, sources panel, grounding badge |
-| `/docs` | API reference — endpoints, request/response examples, code snippets in curl/Python/JS |
+| `/` | Chat UI — sidebar, multi-turn conversation, sources strip below every answer |
+| `/demo` | Single-query demo — pipeline visualizer, full sources panel, grounding breakdown |
+| `/docs` | API reference — endpoints, request/response examples, code snippets |
 
 ---
 
@@ -280,16 +294,13 @@ npx vercel
 
 Set `NEXT_PUBLIC_API_URL` to your Railway backend URL in Vercel dashboard.
 
-### Custom domain
-
-Point `api.argus.dev` → Railway backend  
-Point `argus.dev` → Vercel frontend  
-
 ---
 
 ## API Reference
 
-### `POST /search`
+### `POST /chat` — multi-turn chat
+
+Send the full conversation history. The last user message is used as the search query; prior messages are injected into the synthesis prompt so follow-ups work naturally.
 
 **Headers:**
 ```
@@ -300,44 +311,58 @@ Content-Type: application/json
 **Body:**
 ```json
 {
-  "query": "string",
-  "type": "topic | person",
+  "messages": [
+    {"role": "user", "content": "What are people saying about Rust?"},
+    {"role": "assistant", "content": "On HN, the conversation is mostly about..."},
+    {"role": "user", "content": "Which post had the most upvotes?"}
+  ],
   "provider": "deepseek | gemini",
-  "sources": ["reddit", "hackernews", "github", "exa", "tiktok"]
+  "sources": ["reddit", "hackernews", "github"]
 }
 ```
 
 **Response:**
 ```json
 {
-  "query": "string",
-  "type": "string",
-  "brief": "AI-generated research brief",
+  "brief": "AI answer grounded in freshly scraped posts",
   "eval": {
     "passed": true,
-    "score": 0.91,
-    "claims_checked": 14,
-    "claims_grounded": 13,
+    "score": 0.93,
+    "claims_checked": 11,
+    "claims_grounded": 10,
     "ungrounded_claims": []
   },
   "sources": [
     {
       "source": "reddit",
-      "title": "...",
-      "url": "...",
-      "engagement": { "upvotes": 2847, "comments": 312 }
+      "title": "Why I switched from Go to Rust for my side project",
+      "url": "https://reddit.com/r/rust/...",
+      "body": "After 6 months the borrow checker finally clicked...",
+      "author": "u/somedev",
+      "container": "r/rust",
+      "published_at": "1748100000",
+      "engagement": { "upvotes": 1842, "comments": 204 }
     }
   ],
   "meta": {
     "provider": "deepseek",
     "model": "deepseek-chat",
-    "sources_hit": ["reddit", "hackernews", "github"],
-    "items_retrieved": 47,
+    "items_retrieved": 38,
     "items_in_context": 15,
-    "grounding_score": 0.91,
-    "search_duration_ms": 1240,
-    "token_estimate": 3000
+    "grounding_score": 0.93,
+    "search_duration_ms": 1140
   }
+}
+```
+
+### `POST /search` — single-turn (original endpoint, still available)
+
+```json
+{
+  "query": "string",
+  "type": "topic | person",
+  "provider": "deepseek | gemini",
+  "sources": ["reddit", "hackernews", "github", "exa", "tiktok"]
 }
 ```
 
@@ -360,7 +385,7 @@ curl -X POST "http://localhost:8000/keys/generate?plan=free"
 
 | Service | Free tier | Notes |
 |---------|-----------|-------|
-| DeepSeek | — | ~$0.001 per full search |
+| DeepSeek | — | ~$0.001 per chat message |
 | Gemini | 1M tokens/day | Free tier covers development |
 | Supabase | 500MB | pgvector included |
 | Railway | $5/mo credit | Covers backend + Redis |
@@ -377,10 +402,10 @@ curl -X POST "http://localhost:8000/keys/generate?plan=free"
 - [ ] Persist embeddings to Postgres (semantic search across history)
 - [ ] Redis rate limiting (replace in-memory fallback)
 - [ ] X/Twitter via ScrapeCreators
-- [ ] Streaming `/search/stream` SSE endpoint + frontend live updates
+- [ ] Streaming `POST /chat/stream` SSE endpoint + frontend streaming text
+- [ ] Persist chat sessions to Postgres (load past conversations)
 - [ ] Stripe for API key billing
-- [ ] `/search/similar` — find past searches semantically similar to a new query
-- [ ] Agent status websocket — frontend shows each agent completing in real time
+- [ ] Agent status websocket — real-time pipeline stage updates in the UI
 
 ---
 
