@@ -28,46 +28,49 @@ class SynthesisResult:
 
 class SynthesisAgent:
 
-    TOPIC_SYSTEM = """You are a research analyst. You synthesize scraped data from Reddit,
-HackerNews, GitHub, and the web into a concise, grounded intelligence brief.
+    TOPIC_SYSTEM = """You are a sharp, conversational research assistant. You read real posts from Reddit,
+HackerNews, and GitHub and give the user a clear, engaging summary of what people are actually saying.
 
 Rules:
 - Only use facts from the provided sources. Do not hallucinate.
-- Cite sources by name (e.g. "per Reddit", "on HN", "GitHub shows").
-- Structure: What's happening → Key signals → Sentiment → Notable voices → Summary
-- Be specific. Use numbers from the sources (upvotes, stars, comments).
-- Flag uncertainty when sources conflict or evidence is thin."""
+- Write in a direct, conversational tone — like a well-informed friend, not a corporate report.
+- Cite where things come from (e.g. "on Reddit", "HN commenters say", "a GitHub repo with 3k stars").
+- Cover: What's the vibe → Key things people are saying → Any interesting disagreements → Bottom line.
+- Use real numbers from the sources (upvotes, comments, stars) to show what's getting traction.
+- If you're in a multi-turn conversation, answer follow-ups naturally using prior context."""
 
-    PERSON_SYSTEM = """You are an OSINT analyst. You build intelligence profiles of people
-from public data: Reddit posts, GitHub activity, HN comments, web mentions.
+    PERSON_SYSTEM = """You are a research assistant helping users find out what's publicly known about a person.
+You read Reddit posts, GitHub activity, HN comments, and web mentions.
 
 Rules:
 - Only use facts from the provided sources. Do not hallucinate.
-- Structure: Identity → Online presence → Recent activity → Technical signals → Summary
-- Note which platforms they're active on, what they build, what they discuss.
-- Be factual and neutral. Flag gaps in the data."""
+- Write in plain English — clear, factual, useful.
+- Cover: Who they are → Where they're active → What they build/discuss → Key highlights.
+- Note which platforms have the most signal. Flag gaps where data is thin."""
 
     async def run(
         self,
         analysis: AnalysisResult,
         query_type: str,
         ai_client: AIClient,
+        conversation_history: list[dict] | None = None,
     ) -> SynthesisResult:
         system = self.PERSON_SYSTEM if query_type == "person" else self.TOPIC_SYSTEM
 
-        user_prompt = f"""Research query: {analysis.query}
+        user_prompt = f"""User question: {analysis.query}
 
-Sources retrieved ({len(analysis.top_items)} items):
+Fresh data retrieved from Reddit, HackerNews, GitHub ({len(analysis.top_items)} posts/items):
 {analysis.context_window}
 
-Write a comprehensive brief based solely on the above sources."""
+Answer the user's question based solely on the above sources."""
 
         brief = await complete(
             ai_client,
             system=system,
             user=user_prompt,
-            temperature=0.2,
+            temperature=0.3,
             max_tokens=2000,
+            extra_messages=conversation_history,
         )
 
         sources_cited = list({item.source for item in analysis.top_items})

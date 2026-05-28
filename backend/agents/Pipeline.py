@@ -40,6 +40,7 @@ class ResearchPipeline:
         query_type: str = "topic",
         provider: str = "deepseek",
         sources: list[str] | None = None,
+        conversation_history: list[dict] | None = None,
     ) -> PipelineResult:
         from ai.clients import get_client
         ai_client = get_client(provider)  # type: ignore
@@ -50,8 +51,10 @@ class ResearchPipeline:
         # Stage 2 — Embed + RAG retrieval
         analysis = await self.analysis_agent.run(search)
 
-        # Stage 3 — Synthesize
-        synthesis = await self.synthesis_agent.run(analysis, query_type, ai_client)
+        # Stage 3 — Synthesize (with optional conversation history for multi-turn chat)
+        synthesis = await self.synthesis_agent.run(
+            analysis, query_type, ai_client, conversation_history
+        )
 
         # Stage 4 — Eval
         eval_result = await self.eval_agent.run(synthesis, analysis, ai_client)
@@ -66,6 +69,10 @@ class ResearchPipeline:
                     "source": item.source,
                     "title": item.title,
                     "url": item.url,
+                    "body": item.body,
+                    "author": item.author,
+                    "container": item.container,
+                    "published_at": item.published_at,
                     "engagement": item.engagement,
                 }
                 for item in analysis.top_items[:20]

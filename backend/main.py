@@ -72,6 +72,38 @@ class SearchRequest(BaseModel):
     }
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    provider: Literal["deepseek", "gemini"] = "deepseek"
+    sources: list[str] | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "messages": [
+                        {"role": "user", "content": "What are devs saying about Rust right now?"}
+                    ],
+                    "provider": "deepseek",
+                },
+                {
+                    "messages": [
+                        {"role": "user", "content": "Latest AI coding tools discussion"},
+                        {"role": "assistant", "content": "People on HN are talking about..."},
+                        {"role": "user", "content": "Which one has the most upvotes?"},
+                    ],
+                    "provider": "gemini",
+                },
+            ]
+        }
+    }
+
+
 class EvalResponse(BaseModel):
     passed: bool
     score: float
@@ -141,6 +173,49 @@ async def search(
         query_type=body.type,
         provider=body.provider,
         sources=body.sources,
+    )
+    return SearchResponse(
+        query=result.query,
+        type=result.query_type,
+        brief=result.brief,
+        eval=EvalResponse(**vars(result.eval)),
+        sources=result.sources,
+        meta={**result.meta, "rate_limit": key_data},
+    )
+
+
+@app.post("/chat", response_model=SearchResponse, tags=["Chat"])
+async def chat(
+    body: ChatRequest,
+    key_data: dict = Depends(verify_api_key),
+):
+    """
+    Multi-turn chat endpoint. Send the full conversation history and get back
+    an AI response grounded in freshly scraped Reddit, HN, and GitHub data.
+
+    The last `user` message is used as the search query. Prior messages are
+    injected into the synthesis prompt so follow-up questions work naturally.
+    """
+    user_messages = [m for m in body.messages if m.role == "user"]
+    if not user_messages:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="At least one user message is required.")
+
+    query = user_messages[-1].content
+
+    # All messages except the final user message become conversation history
+    history = (
+        [{"role": m.role, "content": m.content} for m in body.messages[:-1]]
+        if len(body.messages) > 1
+        else None
+    )
+
+    result = await pipeline.run(
+        query=query,
+        query_type="topic",
+        provider=body.provider,
+        sources=body.sources,
+        conversation_history=history,
     )
     return SearchResponse(
         query=result.query,

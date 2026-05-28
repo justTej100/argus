@@ -52,24 +52,30 @@ async def complete(
     temperature: float = 0.3,
     max_tokens: int = 2000,
     json_mode: bool = False,
+    extra_messages: list[dict] | None = None,
 ) -> str:
     """
     Unified completion call. Both DeepSeek and Gemini expose an
     OpenAI-compatible /chat/completions endpoint so one function handles both.
+
+    extra_messages: optional prior conversation turns inserted between the
+    system prompt and the final user message (used for multi-turn chat).
     """
     headers = {
         "Authorization": f"Bearer {client.api_key}",
         "Content-Type": "application/json",
     }
 
+    messages: list[dict] = [{"role": "system", "content": system}]
+    if extra_messages:
+        messages.extend(extra_messages)
+    messages.append({"role": "user", "content": user})
+
     payload: dict = {
         "model": client.model,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
+        "messages": messages,
     }
 
     if json_mode:

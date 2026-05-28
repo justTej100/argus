@@ -6,9 +6,9 @@ import Link from "next/link";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Argus — Agentic Research Intelligence",
+  title: "Argus — Fresh Ideas from the Internet",
   description:
-    "OSINT + trend analysis across Reddit, HN, GitHub, and the web. Powered by a 4-agent RAG pipeline.",
+    "Ask anything. Argus reads Reddit, HN, and GitHub in real time and tells you what people are actually saying. Powered by a 4-agent RAG pipeline.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -20,6 +20,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             Argus
           </Link>
           <div className="flex items-center gap-6 text-sm text-[#8b949e]">
+            <Link href="/" className="hover:text-white transition-colors">
+              Chat
+            </Link>
             <Link href="/demo" className="hover:text-white transition-colors">
               Demo
             </Link>
