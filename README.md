@@ -1,8 +1,8 @@
 # Argus
 
-**ChatGPT for fresh ideas — multi-turn chat grounded in real posts from Reddit, HN, and GitHub.**
+**ChatGPT for fresh ideas - multi-turn chat grounded in real posts from Reddit, HN, and GitHub.**
 
-Ask anything. Argus scrapes the internet in real time, ranks what's most relevant using embeddings, and gives you an AI answer built entirely from actual posts — not its training data. Every response shows you exactly which posts it read.
+Ask anything. Argus scrapes the internet in real time, ranks what's most relevant using embeddings, and gives you an AI answer built entirely from actual posts - not its training data. Every response shows you exactly which posts it read.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-58a6ff?style=flat-square)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square)]()
