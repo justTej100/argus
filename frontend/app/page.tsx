@@ -54,6 +54,7 @@ interface EvalResult {
   claims_checked: number;
   claims_grounded: number;
   ungrounded_claims: string[];
+  explanation: string;     // EvalAgent's prose summary of the grounding check
 }
 
 interface Meta {
@@ -239,27 +240,35 @@ function AssistantBubble({ msg }: { msg: ChatMessage }) {
 
       {/* Grounding badge — color-coded: green ≥80%, yellow ≥60%, red <60% */}
       {msg.eval && (
-        <div className="flex items-center gap-3">
-          <span
-            className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${
-              msg.eval.score >= 0.8
-                ? "bg-green-950/60 text-green-400 border-green-900/50"
-                : msg.eval.score >= 0.6
-                ? "bg-yellow-950/60 text-yellow-400 border-yellow-900/50"
-                : "bg-red-950/60 text-red-400 border-red-900/50"
-            }`}
-          >
-            {(msg.eval.score * 100).toFixed(0)}% grounded
-          </span>
-          {msg.eval.claims_checked > 0 && (
-            <span className="text-[11px] text-[#484f58]">
-              {msg.eval.claims_grounded}/{msg.eval.claims_checked} claims verified
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <span
+              className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${
+                msg.eval.score >= 0.8
+                  ? "bg-green-950/60 text-green-400 border-green-900/50"
+                  : msg.eval.score >= 0.6
+                  ? "bg-yellow-950/60 text-yellow-400 border-yellow-900/50"
+                  : "bg-red-950/60 text-red-400 border-red-900/50"
+              }`}
+            >
+              {(msg.eval.score * 100).toFixed(0)}% grounded
             </span>
-          )}
-          {msg.meta && (
-            <span className="text-[11px] text-[#484f58] font-mono ml-auto">
-              {msg.meta.model}
-            </span>
+            {msg.eval.claims_checked > 0 && (
+              <span className="text-[11px] text-[#484f58]">
+                {msg.eval.claims_grounded}/{msg.eval.claims_checked} claims verified
+              </span>
+            )}
+            {msg.meta && (
+              <span className="text-[11px] text-[#484f58] font-mono ml-auto">
+                {msg.meta.model}
+              </span>
+            )}
+          </div>
+          {/* Show EvalAgent's explanation when the grounding score is imperfect */}
+          {msg.eval.explanation && msg.eval.score < 1.0 && (
+            <p className="text-[11px] text-[#484f58] leading-relaxed">
+              {msg.eval.explanation}
+            </p>
           )}
         </div>
       )}
@@ -330,11 +339,16 @@ export default function ChatPage() {
     setInput("");
     setError("");
 
-    // Animate through the 4 agent stages every 1.8 seconds.
-    // This is purely cosmetic — the real pipeline runs on the backend.
-    // The timer is cleared as soon as the response arrives.
+    // Show loading state immediately so the user gets instant feedback.
+    // Without this, stage stays "idle" for 1.8s and the button stays enabled,
+    // which would let a double-send slip through on suggested query clicks.
+    setStage("search");
+
+    // Continue cycling through remaining stages on a timer (cosmetic only).
+    // The real pipeline runs on the backend — we just animate for UX.
+    // Timer is cleared as soon as the actual response arrives.
     const stages: Stage[] = ["search", "analysis", "synthesis", "eval"];
-    let si = 0;
+    let si = 1; // start at 1 — "search" was already set above
     const interval = setInterval(() => {
       if (si < stages.length) setStage(stages[si++]);
       else clearInterval(interval);

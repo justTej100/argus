@@ -233,19 +233,31 @@ export default function DemoPage() {
                     href={s.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#58a6ff] transition-colors"
+                    className="block bg-[#0d1117] border border-[#30363d] rounded-lg p-3 hover:border-[#58a6ff] transition-colors group"
                   >
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1.5 flex-wrap">
                       <span className="text-xs bg-[#21262d] text-[#8b949e] px-1.5 py-0.5 rounded">
                         {s.source}
                       </span>
-                      {Object.entries(s.engagement || {}).map(([k, v]) => (
+                      {/* container = subreddit, GitHub org, "HackerNews", etc. */}
+                      {s.container && (
+                        <span className="text-xs text-[#484f58]">{s.container}</span>
+                      )}
+                      {Object.entries(s.engagement || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => (
                         <span key={k} className="text-xs text-[#484f58]">
-                          {String(v)} {k}
+                          {Number(v).toLocaleString()} {k}
                         </span>
                       ))}
                     </div>
-                    <p className="text-xs text-[#c9d1d9] line-clamp-2">{s.title}</p>
+                    <p className="text-xs text-[#c9d1d9] line-clamp-2 group-hover:text-white transition-colors mb-1">
+                      {s.title}
+                    </p>
+                    {/* body excerpt — the actual post text Argus read */}
+                    {s.body && (
+                      <p className="text-[11px] text-[#484f58] line-clamp-2 leading-relaxed">
+                        {s.body}
+                      </p>
+                    )}
                   </a>
                 ))}
               </div>

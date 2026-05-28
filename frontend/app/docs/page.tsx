@@ -1,5 +1,28 @@
 import Link from "next/link";
 
+const CODE_CHAT_CURL = `curl -X POST https://api.argus.dev/chat \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What are devs saying about Rust right now?"}
+    ],
+    "provider": "deepseek"
+  }'`;
+
+const CODE_CHAT_FOLLOWUP = `# Multi-turn — send the full history on every request
+curl -X POST https://api.argus.dev/chat \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "messages": [
+      {"role": "user",      "content": "What are devs saying about Rust?"},
+      {"role": "assistant", "content": "On HN, the top thread this week..."},
+      {"role": "user",      "content": "Which post had the most upvotes?"}
+    ],
+    "provider": "deepseek"
+  }'`;
+
 const CODE_CURL = `curl -X POST https://api.argus.dev/search \\
   -H "x-api-key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
@@ -52,13 +75,18 @@ const CODE_RESPONSE = `{
     "score": 0.91,
     "claims_checked": 14,
     "claims_grounded": 13,
-    "ungrounded_claims": []
+    "ungrounded_claims": [],
+    "explanation": "13 of 14 claims were traced to the retrieved sources."
   },
   "sources": [
     {
       "source": "reddit",
       "title": "SEC approves spot Bitcoin ETFs...",
       "url": "https://reddit.com/r/Bitcoin/...",
+      "body": "The SEC has approved 11 spot Bitcoin ETF applications...",
+      "container": "r/Bitcoin",
+      "author": "u/cryptonews",
+      "published_at": "2024-01-10T14:32:00",
       "engagement": { "upvotes": 18420, "comments": 1204 }
     }
   ],
@@ -67,6 +95,7 @@ const CODE_RESPONSE = `{
     "model": "deepseek-chat",
     "sources_hit": ["reddit", "hackernews", "github"],
     "items_retrieved": 47,
+    "items_in_context": 8,
     "grounding_score": 0.91,
     "search_duration_ms": 1240
   }
@@ -110,6 +139,68 @@ export default function DocsPage() {
           lang="bash"
           code={`curl -X POST "https://api.argus.dev/keys/generate?plan=free"`}
         />
+      </section>
+
+      {/* POST /chat — primary endpoint used by the homepage */}
+      <section className="mb-16">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="bg-[#1f6feb] text-white text-xs font-bold px-2 py-1 rounded">POST</span>
+          <code className="text-white font-mono text-lg">/chat</code>
+          <span className="text-xs bg-[#21262d] text-[#58a6ff] px-2 py-0.5 rounded border border-[#30363d]">
+            primary
+          </span>
+        </div>
+        <p className="text-[#8b949e] mb-6">
+          Multi-turn chat endpoint. Send the full conversation history on every request — the last
+          user message drives the search, and earlier turns are threaded into the LLM prompt so
+          follow-up questions are answered in context.
+        </p>
+
+        <h3 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wider mb-3">
+          Request body
+        </h3>
+        <div className="bg-[#161b22] border border-[#30363d] rounded-xl overflow-hidden mb-6">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[#30363d]">
+                <th className="text-left px-4 py-3 text-[#8b949e] font-medium">Field</th>
+                <th className="text-left px-4 py-3 text-[#8b949e] font-medium">Type</th>
+                <th className="text-left px-4 py-3 text-[#8b949e] font-medium">Required</th>
+                <th className="text-left px-4 py-3 text-[#8b949e] font-medium">Description</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#21262d]">
+              {[
+                ["messages", 'Array<{role, content}>', "✅", "Full conversation history. Last user message is the query."],
+                ["provider", '"deepseek" | "gemini"', "—", 'Default: "deepseek"'],
+                ["sources", "string[]", "—", "Default: reddit, hackernews, github"],
+              ].map(([field, type, req, desc]) => (
+                <tr key={String(field)}>
+                  <td className="px-4 py-3 font-mono text-[#58a6ff]">{field}</td>
+                  <td className="px-4 py-3 font-mono text-xs text-[#8b949e]">{type}</td>
+                  <td className="px-4 py-3 text-center">{req}</td>
+                  <td className="px-4 py-3 text-[#8b949e]">{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h3 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wider mb-3">
+          Examples
+        </h3>
+        <div className="space-y-4 mb-6">
+          <CodeBlock lang="bash — first turn" code={CODE_CHAT_CURL} />
+          <CodeBlock lang="bash — follow-up turn" code={CODE_CHAT_FOLLOWUP} />
+        </div>
+
+        <h3 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wider mb-3">
+          Response
+        </h3>
+        <p className="text-[#8b949e] text-sm mb-4">
+          Same shape as <code className="text-[#58a6ff] font-mono">/search</code> — see the response
+          example below.
+        </p>
       </section>
 
       {/* POST /search */}

@@ -15,7 +15,6 @@ Swagger UI (interactive docs): http://localhost:8000/docs
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
 from typing import Literal
