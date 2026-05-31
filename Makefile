@@ -1,7 +1,7 @@
 .PHONY: help run start backend frontend install install-backend install-frontend stop
 
 BACKEND_PORT  := 8000
-FRONTEND_PORT := 3000
+FRONTEND_PORT := 3001
 BACKEND_URL   := http://localhost:$(BACKEND_PORT)
 FRONTEND_URL  := http://localhost:$(FRONTEND_PORT)
 
@@ -15,14 +15,14 @@ help:
 	@echo "    make backend    Start backend only"
 	@echo "    make frontend   Start frontend only"
 	@echo "    make install    Install all dependencies (backend + frontend)"
-	@echo "    make stop       Kill anything running on :8000 and :3000"
+	@echo "    make stop       Kill anything running on :$(BACKEND_PORT) and :$(FRONTEND_PORT)"
 	@echo ""
 
 # ── Install ────────────────────────────────────────────────────────────────────
 
 install: install-backend install-frontend
 	@echo ""
-	@echo "  ✔  All dependencies installed. Run 'make dev' to start."
+	@echo "  ✔  All dependencies installed. Run 'make run' to start."
 	@echo ""
 
 install-backend:
@@ -35,9 +35,9 @@ install-frontend:
 
 # ── Run ────────────────────────────────────────────────────────────────────────
 
-# Start both services in parallel using a trap to kill both on Ctrl-C.
-# Each process is backgrounded then waited on so Ctrl-C reaches both.
+# start is an alias for run
 start: run
+
 run:
 	@if [ ! -f .env ]; then \
 		echo ""; \
@@ -48,20 +48,19 @@ run:
 	@echo ""
 	@echo "  Starting Argus..."
 	@echo ""
+	@echo "  Chat     →  $(FRONTEND_URL)"
+	@echo "  Backend  →  $(BACKEND_URL)"
+	@echo "  Swagger  →  $(BACKEND_URL)/docs"
+	@echo ""
+	@echo "  Press Ctrl-C to stop, or run 'make stop' from another terminal."
+	@echo ""
 	@$(MAKE) -j2 _backend _frontend
 
-
-
-# Internal targets used by the parallel make above
+# Internal targets used by the parallel -j2 make call above
 _backend:
-	@echo "  → Backend  →  $(BACKEND_URL)"
-	@echo "  → Swagger  →  $(BACKEND_URL)/docs"
-	@echo ""
-	@cd backend && uvicorn main:app --reload --port $(BACKEND_PORT)
+	@cd backend && python3 -m uvicorn main:app --reload --port $(BACKEND_PORT)
 
 _frontend:
-	@echo "  → Frontend →  $(FRONTEND_URL)"
-	@echo ""
 	@cd frontend && npm run dev -- --port $(FRONTEND_PORT)
 
 backend:
@@ -75,7 +74,7 @@ backend:
 	@echo "  Backend  →  $(BACKEND_URL)"
 	@echo "  Swagger  →  $(BACKEND_URL)/docs"
 	@echo ""
-	@cd backend && uvicorn main:app --reload --port $(BACKEND_PORT)
+	@cd backend && python3 -m uvicorn main:app --reload --port $(BACKEND_PORT)
 
 frontend:
 	@echo ""
