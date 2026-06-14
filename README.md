@@ -11,7 +11,32 @@ Ask anything. Argus scrapes the internet in real time, ranks what's most relevan
 [![DeepSeek](https://img.shields.io/badge/AI-DeepSeek_%7C_Gemini-ff6b6b?style=flat-square)]()
 
 ---
+## TODO
+🚧 Roadmap
+⚠️ This project is being renamed — current candidates include Bedlam, Entropy, DOOMFEED, Maelstrom, or Overvoid. TBD. or something relating to overstimulation
 
+ instead of doomscrolling what if we had rapid popups that the user had to close and the popups were intresting
+ Rename and rebrand the app
+ Migrate to MERN monorepo (npm workspaces, single .env)
+ MongoDB character persistence
+ Live feed pulling from external APIs:
+USGS Earthquake
+Open-Meteo weather
+CoinGecko crypto
+NASA APOD
+Kanye Rest
+ISS location
+Polymarket prediction odds
+Reddit top posts
+ WebSocket real-time feed updates
+ Character buffs/debuffs based on world events
+ React/comment/repost on feed events as your character
+ User posts (text, images) alongside API feed content
+ Follower/following system
+ Character evolution history (track how your taste changes over time)
+ Leaderboard of chaos witnessed
+ WholeLottaPosts integration — federate posts and identity across both platforms
+ Deploy (frontend + backend)
 ## Quick Start
 
 **You need:** Python 3.12+, Node 18+.
