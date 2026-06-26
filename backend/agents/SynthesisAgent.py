@@ -1,21 +1,6 @@
-"""
-SynthesisAgent — generates the final answer using an LLM.
-
-This is where the "G" in RAG happens: Generation.
-
-The agent receives the context window built by AnalysisAgent (up to 15
-real posts formatted as text) and asks the LLM to answer the user's
-question using only that content. The "only use the provided sources"
-rule in the system prompt is what keeps the LLM from hallucinating.
-
-Multi-turn chat: when conversation_history is provided, prior turns are
-prepended to the LLM messages array. The model sees the full conversation
-and can answer follow-ups like "expand on point 2" or "which of those
-had the most upvotes?" coherently.
-"""
-
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from ai.clients import AIClient, complete
@@ -25,81 +10,104 @@ from agents.AnalysisAgent import AnalysisResult
 @dataclass
 class SynthesisResult:
     query: str
-    query_type: str
-    brief: str           # the AI-generated answer text
-    model_used: str      # e.g. "deepseek-chat"
-    provider: str        # "deepseek" or "gemini"
-    sources_cited: list[str]   # which source platforms were in the context
+    mode: str
+    brief: str
+    model_used: str
+    provider: str
+    structured: dict | None
 
 
 class SynthesisAgent:
+    SYSTEM = (
+        'You are a precise study assistant grounded in textbook excerpts. '
+        'Every factual claim must include one or more citation tags copied verbatim from context '
+        'using the format [pX:sY]. Never invent page or sentence numbers. '
+        'Never cite community context as textbook evidence.'
+    )
 
-    # The system prompt defines the AI's role and the rules it must follow.
-    # "Only use facts from the provided sources" is the grounding constraint —
-    # it tells the LLM to treat the context window as its only allowed knowledge.
+    def _build_textbook_context(self, chunks: list[dict]) -> str:
+        lines: list[str] = []
+        for idx, chunk in enumerate(chunks, start=1):
+            tagged = (
+                f"[doc:{chunk['document_id']}] [p{chunk['page_number']}:s{chunk['sentence_start_idx']}] "
+                f"to [p{chunk['page_number']}:s{chunk['sentence_end_idx']}]\n"
+                f"{chunk['text']}"
+            )
+            lines.append(f'Chunk {idx}:\n{tagged}')
+        return '\n\n'.join(lines) if lines else 'No textbook chunks were retrieved.'
 
-    TOPIC_SYSTEM = """You are a sharp, conversational research assistant. You read real posts from Reddit,
-HackerNews, and GitHub and give the user a clear, engaging summary of what people are actually saying.
-
-Rules:
-- Only use facts from the provided sources. Do not hallucinate.
-- Write in a direct, conversational tone — like a well-informed friend, not a corporate report.
-- Cite where things come from (e.g. "on Reddit", "HN commenters say", "a GitHub repo with 3k stars").
-- Cover: What's the vibe → Key things people are saying → Any interesting disagreements → Bottom line.
-- Use real numbers from the sources (upvotes, comments, stars) to show what's getting traction.
-- If you're in a multi-turn conversation, answer follow-ups naturally using prior context."""
-
-    PERSON_SYSTEM = """You are a research assistant helping users find out what's publicly known about a person.
-You read Reddit posts, GitHub activity, HN comments, and web mentions.
-
-Rules:
-- Only use facts from the provided sources. Do not hallucinate.
-- Write in plain English — clear, factual, useful.
-- Cover: Who they are → Where they're active → What they build/discuss → Key highlights.
-- Note which platforms have the most signal. Flag gaps where data is thin."""
+    def _build_community_context(self, items: list[dict]) -> str:
+        if not items:
+            return 'No community context configured for this scope.'
+        snippets: list[str] = []
+        for item in items[:12]:
+            snippets.append(
+                f"[{item.get('source', 'reddit')}:{item.get('subreddit', 'unknown')}] "
+                f"{item.get('title', '')}\n{item.get('body', '')[:240]}"
+            )
+        return '\n\n'.join(snippets)
 
     async def run(
         self,
         analysis: AnalysisResult,
-        query_type: str,
+        community_context: list[dict],
+        mode: str,
         ai_client: AIClient,
         conversation_history: list[dict] | None = None,
     ) -> SynthesisResult:
-        # Pick the right system prompt based on whether this is a topic or person query.
-        system = self.PERSON_SYSTEM if query_type == "person" else self.TOPIC_SYSTEM
+        textbook_context = self._build_textbook_context(analysis.chunks)
+        community_text = self._build_community_context(community_context)
 
-        # The user prompt contains two things:
-        #   1. The user's actual question.
-        #   2. The context window — all the source documents the LLM is allowed to use.
-        # By putting the sources IN the prompt, we're doing the "A" in RAG:
-        # Augmenting the generation with Retrieved content.
-        user_prompt = f"""User question: {analysis.query}
+        mode_prompt = {
+            'chat': 'Answer naturally in markdown with concise explanations and explicit [pX:sY] citations.',
+            'quiz': (
+                'Return JSON only with this schema: '
+                '{"items":[{"question":"...","answer":"...","citations":["[p12:s4]"]}]}'
+            ),
+            'flashcards': (
+                'Return JSON only with this schema: '
+                '{"items":[{"front":"...","back":"...","citations":["[p12:s4]"]}]}'
+            ),
+            'summary': (
+                'Return JSON only with this schema: '
+                '{"title":"...","outline":[{"heading":"...","bullets":["..."]}],"citations":["[p12:s4]"]}'
+            ),
+        }.get(mode, 'Answer in markdown with [pX:sY] citations.')
 
-Fresh data retrieved from Reddit, HackerNews, GitHub ({len(analysis.top_items)} posts/items):
-{analysis.context_window}
-
-Answer the user's question based solely on the above sources."""
-
-        brief = await complete(
-            ai_client,
-            system=system,
-            user=user_prompt,
-            temperature=0.3,   # slightly higher than 0 for a natural, varied tone
-            max_tokens=2000,
-            # Conversation history slots in between the system prompt and this
-            # user message. The LLM sees: [system] → [prior turns] → [current query + sources].
-            extra_messages=conversation_history,
+        user_prompt = (
+            f'User question: {analysis.query}\n\n'
+            f'Textbook context:\n{textbook_context}\n\n'
+            f'Community context (supplementary only, never as textbook citation):\n{community_text}\n\n'
+            f'Mode: {mode}\n'
+            f'{mode_prompt}'
         )
 
-        # Record which source platforms appeared in the context — useful for
-        # the frontend to show "answered using reddit, hackernews" etc.
-        sources_cited = list({item.source for item in analysis.top_items})
+        json_mode = mode in {'quiz', 'flashcards', 'summary'}
+        raw = await complete(
+            ai_client,
+            system=self.SYSTEM,
+            user=user_prompt,
+            temperature=0.2,
+            max_tokens=2000,
+            json_mode=json_mode,
+            extra_messages=conversation_history if mode == 'chat' else None,
+        )
+
+        structured = None
+        brief = raw
+        if json_mode:
+            try:
+                structured = json.loads(raw)
+                brief = json.dumps(structured)
+            except json.JSONDecodeError:
+                structured = {'raw': raw}
+                brief = raw
 
         return SynthesisResult(
             query=analysis.query,
-            query_type=query_type,
+            mode=mode,
             brief=brief,
             model_used=ai_client.model,
             provider=ai_client.provider,
-            sources_cited=sources_cited,
+            structured=structured,
         )

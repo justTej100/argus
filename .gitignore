@@ -10,28 +10,6 @@
 .env.test
 
 # ========================
-# Next.js / Frontend
-# ========================
-frontend/.next/
-frontend/out/
-frontend/build/
-frontend/.vercel/
-
-# Node / npm
-node_modules/
-frontend/node_modules/
-.pnp
-.pnp.js
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-package-lock.json
-
-# TypeScript
-*.tsbuildinfo
-next-env.d.ts
-
-# ========================
 # Python / Backend
 # ========================
 __pycache__/

@@ -1,25 +1,3 @@
-"""
-Database client — async Postgres via asyncpg + pgvector.
-
-All functions gracefully no-op when DATABASE_URL is not set, so the app
-works in full without a database. Postgres is only needed for:
-  - Persisting searches and source items across restarts.
-  - Semantic search over past results (POST /search/similar — future feature).
-
-To enable:
-  1. Create a Supabase project (free tier) at supabase.com.
-  2. Run backend/db/schema.sql against it to create the tables.
-  3. Add DATABASE_URL to your .env.
-
-Usage:
-    from db.client import get_pool, save_search, save_items, save_eval
-
-    pool = await get_pool()   # returns None if DATABASE_URL is not set
-    if pool:
-        async with pool.acquire() as conn:
-            search_id = await save_search(conn, ...)
-"""
-
 from __future__ import annotations
 
 import json
@@ -28,162 +6,269 @@ from typing import Any
 
 import asyncpg
 
-# Module-level connection pool — created once, reused across all requests.
-# asyncpg pools handle connection reuse and concurrent access automatically.
 _pool: asyncpg.Pool | None = None
 
 
-async def get_pool() -> asyncpg.Pool | None:
-    """
-    Return the shared connection pool, creating it on first call.
-
-    Returns None (instead of raising) when DATABASE_URL is not set,
-    so callers can use `if pool:` to skip DB operations gracefully.
-    """
+async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is not None:
         return _pool
 
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        # No database configured — the app runs fine without it.
-        return None
+    database_url = os.environ.get('DATABASE_URL')
+    if not database_url:
+        raise RuntimeError('DATABASE_URL is required')
 
-    try:
-        # min_size=2: keep 2 connections warm so the first request isn't slow.
-        # max_size=10: cap at 10 to avoid overwhelming Supabase's free tier.
-        _pool = await asyncpg.create_pool(db_url, min_size=2, max_size=10)
-        return _pool
-    except Exception as exc:
-        print(f"[db] Could not connect to Postgres: {exc}")
-        return None
+    _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
+    return _pool
 
 
-# ---------------------------------------------------------------------------
-# Save helpers
-# ---------------------------------------------------------------------------
-# Each function takes a live asyncpg Connection (not the pool) so callers
-# can wrap multiple saves in a single transaction if needed.
-
-async def save_search(
-    conn: asyncpg.Connection,
-    query: str,
-    query_type: str,
-    provider: str,
-    brief: str,
-    grounding_score: float,
-    sources_hit: list[str],
-    items_retrieved: int,
-    duration_ms: int,
+async def create_document(
+    title: str,
+    course: str | None,
+    status: str,
+    total_pages: int,
+    storage_path: str,
+    subreddits: list[str] | None,
 ) -> str:
-    """
-    Insert one search record and return its UUID.
-
-    The UUID is used as a foreign key when saving source_items and eval_results,
-    so call this first and pass the returned id to the other save functions.
-    """
-    row = await conn.fetchrow(
-        """
-        INSERT INTO searches
-            (query, query_type, provider, brief, grounding_score,
-             sources_hit, items_retrieved, duration_ms)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id::text
-        """,
-        query, query_type, provider, brief, grounding_score,
-        sources_hit, items_retrieved, duration_ms,
-    )
-    return row["id"]
-
-
-async def save_items(
-    conn: asyncpg.Connection,
-    search_id: str,
-    items: list[Any],
-) -> None:
-    """
-    Bulk insert SourceItems with their embedding vectors.
-
-    ON CONFLICT DO NOTHING deduplicates on item_id — the same Reddit post
-    scraped in two different searches is only stored once.
-    """
-    for item in items:
-        # pgvector expects the embedding as a string: "[0.1, 0.2, -0.3, ...]"
-        embedding_str = None
-        if item.embedding:
-            embedding_str = "[" + ",".join(str(x) for x in item.embedding) + "]"
-
-        await conn.execute(
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
             """
-            INSERT INTO source_items
-                (search_id, item_id, source, title, body, url,
-                 author, container, published_at, engagement, metadata, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::vector)
-            ON CONFLICT (item_id) DO NOTHING
+            INSERT INTO documents (title, course, status, total_pages, storage_path, subreddits)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id::text
             """,
-            search_id,
-            item.item_id,
-            item.source,
-            item.title,
-            item.body,
-            item.url,
-            item.author,
-            item.container,
-            item.published_at,
-            json.dumps(item.engagement),
-            json.dumps(item.metadata),
-            embedding_str,
+            title,
+            course,
+            status,
+            total_pages,
+            storage_path,
+            subreddits,
+        )
+    return row['id']
+
+
+async def update_document_status(
+    document_id: str,
+    status: str,
+    total_pages: int | None = None,
+    has_scan_warning: bool | None = None,
+    error_message: str | None = None,
+    storage_path: str | None = None,
+) -> None:
+    updates: list[str] = ['status = $2']
+    params: list[Any] = [document_id, status]
+    idx = 3
+    if total_pages is not None:
+        updates.append(f'total_pages = ${idx}')
+        params.append(total_pages)
+        idx += 1
+    if has_scan_warning is not None:
+        updates.append(f'has_scan_warning = ${idx}')
+        params.append(has_scan_warning)
+        idx += 1
+    if error_message is not None:
+        updates.append(f'error_message = ${idx}')
+        params.append(error_message)
+        idx += 1
+    if storage_path is not None:
+        updates.append(f'storage_path = ${idx}')
+        params.append(storage_path)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE documents SET {', '.join(updates)} WHERE id = $1::uuid",
+            *params,
         )
 
 
-async def save_eval(
-    conn: asyncpg.Connection,
-    search_id: str,
-    passed: bool,
-    score: float,
-    claims_checked: int,
-    claims_grounded: int,
-    ungrounded_claims: list[str],
-    explanation: str,
+async def get_document(document_id: str) -> dict | None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, title, course, status, total_pages, storage_path,
+                   uploaded_at, subreddits, has_scan_warning, error_message
+            FROM documents
+            WHERE id = $1::uuid
+            """,
+            document_id,
+        )
+    if not row:
+        return None
+    return dict(row)
+
+
+async def list_documents(course: str | None = None) -> list[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if course:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, title, course, status, total_pages, storage_path,
+                       uploaded_at, subreddits, has_scan_warning, error_message
+                FROM documents
+                WHERE course = $1
+                ORDER BY uploaded_at DESC
+                """,
+                course,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT id::text, title, course, status, total_pages, storage_path,
+                       uploaded_at, subreddits, has_scan_warning, error_message
+                FROM documents
+                ORDER BY uploaded_at DESC
+                """
+            )
+    return [dict(r) for r in rows]
+
+
+async def delete_document(document_id: str) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute('DELETE FROM documents WHERE id = $1::uuid', document_id)
+
+
+async def replace_document_content(
+    document_id: str,
+    chunks: list[dict],
+    sentences: list[dict],
 ) -> None:
-    """Insert the EvalAgent grounding check results for a search."""
-    await conn.execute(
-        """
-        INSERT INTO eval_results
-            (search_id, passed, score, claims_checked,
-             claims_grounded, ungrounded_claims, explanation)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """,
-        search_id, passed, score, claims_checked,
-        claims_grounded, ungrounded_claims, explanation,
-    )
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute('DELETE FROM document_chunks WHERE document_id = $1::uuid', document_id)
+            await conn.execute('DELETE FROM document_sentences WHERE document_id = $1::uuid', document_id)
+
+            for sentence in sentences:
+                await conn.execute(
+                    """
+                    INSERT INTO document_sentences (document_id, page_number, sentence_idx, text)
+                    VALUES ($1::uuid, $2, $3, $4)
+                    """,
+                    document_id,
+                    sentence['page_number'],
+                    sentence['sentence_idx'],
+                    sentence['text'],
+                )
+
+            for chunk in chunks:
+                embedding_str = '[' + ','.join(str(x) for x in chunk['embedding']) + ']'
+                await conn.execute(
+                    """
+                    INSERT INTO document_chunks (
+                        document_id,
+                        page_number,
+                        sentence_start_idx,
+                        sentence_end_idx,
+                        text,
+                        embedding,
+                        bbox
+                    )
+                    VALUES ($1::uuid, $2, $3, $4, $5, $6::vector, $7::jsonb)
+                    """,
+                    document_id,
+                    chunk['page_number'],
+                    chunk['sentence_start_idx'],
+                    chunk['sentence_end_idx'],
+                    chunk['text'],
+                    embedding_str,
+                    json.dumps(chunk.get('bbox')) if chunk.get('bbox') is not None else None,
+                )
 
 
-async def semantic_search(
-    conn: asyncpg.Connection,
-    query_embedding: list[float],
-    limit: int = 10,
-) -> list[asyncpg.Record]:
-    """
-    Find stored items whose embeddings are most similar to the query embedding.
+async def get_scope_document_ids(scope: dict | None) -> list[str]:
+    scope = scope or {'type': 'library'}
+    scope_type = scope.get('type', 'library')
 
-    Uses pgvector's <=> operator (cosine distance) with the ivfflat index
-    for fast approximate nearest-neighbor search.
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if scope_type == 'document':
+            document_id = scope.get('document_id')
+            if not document_id:
+                return []
+            row = await conn.fetchrow('SELECT id::text FROM documents WHERE id = $1::uuid AND status = $2', document_id, 'ready')
+            return [row['id']] if row else []
 
-    The similarity score returned is 1 - cosine_distance, so:
-      1.0 = identical
-      0.0 = completely unrelated
-    """
-    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
-    return await conn.fetch(
-        """
-        SELECT
-            source, title, url, body, engagement,
-            1 - (embedding <=> $1::vector) AS similarity
-        FROM source_items
-        WHERE embedding IS NOT NULL
-        ORDER BY embedding <=> $1::vector
-        LIMIT $2
-        """,
-        embedding_str, limit,
-    )
+        if scope_type == 'course':
+            course = scope.get('course')
+            if not course:
+                return []
+            rows = await conn.fetch(
+                'SELECT id::text FROM documents WHERE course = $1 AND status = $2 ORDER BY uploaded_at DESC',
+                course,
+                'ready',
+            )
+            return [r['id'] for r in rows]
+
+        rows = await conn.fetch('SELECT id::text FROM documents WHERE status = $1 ORDER BY uploaded_at DESC', 'ready')
+        return [r['id'] for r in rows]
+
+
+async def retrieve_similar_chunks(query_embedding: list[float], document_ids: list[str], limit: int = 12) -> list[dict]:
+    if not document_ids:
+        return []
+    embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                c.id,
+                c.document_id::text AS document_id,
+                d.title AS document_title,
+                d.course,
+                c.page_number,
+                c.sentence_start_idx,
+                c.sentence_end_idx,
+                c.text,
+                c.bbox,
+                1 - (c.embedding <=> $1::vector) AS similarity
+            FROM document_chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE c.document_id = ANY($2::uuid[])
+            ORDER BY c.embedding <=> $1::vector
+            LIMIT $3
+            """,
+            embedding_str,
+            document_ids,
+            limit,
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_sentence(document_id: str, page_number: int, sentence_idx: int) -> str | None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT text
+            FROM document_sentences
+            WHERE document_id = $1::uuid AND page_number = $2 AND sentence_idx = $3
+            """,
+            document_id,
+            page_number,
+            sentence_idx,
+        )
+    return row['text'] if row else None
+
+
+async def get_scope_subreddits(document_ids: list[str]) -> list[str]:
+    if not document_ids:
+        return []
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT unnest(subreddits) AS subreddit
+            FROM documents
+            WHERE id = ANY($1::uuid[]) AND subreddits IS NOT NULL
+            """,
+            document_ids,
+        )
+    result = [r['subreddit'] for r in rows if r['subreddit']]
+    return sorted(set(result))

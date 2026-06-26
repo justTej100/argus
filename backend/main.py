@@ -1,293 +1,468 @@
-"""
-Argus — FastAPI entry point.
-
-This file only does two things:
-  1. Defines the HTTP routes (what URLs the API responds to).
-  2. Converts between HTTP request/response shapes and the pipeline's internal types.
-
-All the real work happens in agents/pipeline.py. Keeping routes thin like this
-makes it easy to swap the transport layer (e.g. add websockets, gRPC) later.
-
-Run with:
-    cd backend && uvicorn main:app --reload
-Swagger UI (interactive docs): http://localhost:8000/docs
-"""
-
 from __future__ import annotations
 
+import json
+import re
 import time
+import asyncio
+import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from dotenv import load_dotenv
-
-# Path(__file__) is this file (backend/main.py).
-# .parent      → backend/
-# .parent.parent → argus/   ← where the single .env lives
-# This means you can run uvicorn from any directory and it still finds the .env.
-load_dotenv(Path(__file__).parent.parent / ".env")
-
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response as FastAPIResponse
+from nicegui import ui
 from pydantic import BaseModel
 
 from agents.Pipeline import ResearchPipeline
-from api.keys import generate_api_key, verify_api_key
+from auth import login_response, require_session, session_is_valid
+from db.client import create_document, delete_document, get_document, list_documents, update_document_status
+from jobs import enqueue_ingestion
+from storage import delete_pdf, download_pdf, upload_pdf
 
-app = FastAPI(
-    title="Argus API",
-    description=(
-        "Agentic RAG research pipeline. OSINT + trend analysis across "
-        "Reddit, HN, GitHub, Exa, and social platforms.\n\n"
-        "**Demo key:** `demo-key-argus` (10 requests/day)\n\n"
-        "Use `POST /keys/generate` to get your own key."
-    ),
-    version="1.0.0",
-)
+load_dotenv(Path(__file__).parent.parent / '.env')
 
-# Allow all origins in dev so the Next.js frontend (localhost:3000) can call
-# the backend (localhost:8000) without browser CORS errors.
-# In production, replace "*" with your actual frontend domain.
+app = FastAPI(title='Argus Study Buddy', version='2.0.0')
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=['*'],
+    allow_methods=['*'],
+    allow_headers=['*'],
+    allow_credentials=True,
 )
 
-# Create the pipeline once at startup, not on every request.
-# The agents inside it (SearchAgent, AnalysisAgent, etc.) are stateless,
-# so a single shared instance is safe and avoids re-initialization overhead.
 pipeline = ResearchPipeline()
 
+try:
+    from nicegui_pdf import PdfViewer
+except Exception:  # pragma: no cover
+    PdfViewer = None  # type: ignore
 
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
-# Pydantic models do two things here:
-#   1. Validate incoming JSON — FastAPI returns a 422 automatically if the
-#      shape doesn't match, so we don't write any manual validation code.
-#   2. Serialize outgoing data — the response_model= on each route uses these
-#      to control exactly which fields the client sees.
 
-class SearchRequest(BaseModel):
-    query: str
-    type: Literal["topic", "person"] = "topic"
-    provider: Literal["deepseek", "gemini"] = "deepseek"
-    sources: list[str] | None = None  # None = use all default sources
-
-    model_config = {
-        "json_schema_extra": {
-            # These show up as example payloads in the /docs Swagger UI.
-            "examples": [
-                {
-                    "query": "bitcoin ETF approval",
-                    "type": "topic",
-                    "provider": "deepseek",
-                },
-                {
-                    "query": "Vitalik Buterin",
-                    "type": "person",
-                    "provider": "gemini",
-                    "sources": ["reddit", "hackernews", "github"],
-                },
-            ]
-        }
-    }
+class LoginRequest(BaseModel):
+    password: str
 
 
 class ChatMessage(BaseModel):
-    # Same shape as the OpenAI messages array — role + content.
-    # This makes it easy to swap in other LLM providers later.
-    role: Literal["user", "assistant"]
+    role: Literal['user', 'assistant']
     content: str
 
 
-class ChatRequest(BaseModel):
-    # The frontend sends the ENTIRE conversation history on every request.
-    # The backend doesn't store state — the client owns the history.
-    # This is the same pattern OpenAI's chat API uses.
-    messages: list[ChatMessage]
-    provider: Literal["deepseek", "gemini"] = "deepseek"
-    sources: list[str] | None = None
+class Scope(BaseModel):
+    type: Literal['document', 'course', 'library'] = 'library'
+    document_id: str | None = None
+    course: str | None = None
 
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "messages": [
-                        {"role": "user", "content": "What are devs saying about Rust right now?"}
-                    ],
-                    "provider": "deepseek",
-                },
-                {
-                    # Multi-turn example: the second user message is a follow-up.
-                    # The prior assistant turn gives the LLM context to answer it.
-                    "messages": [
-                        {"role": "user", "content": "Latest AI coding tools discussion"},
-                        {"role": "assistant", "content": "People on HN are talking about..."},
-                        {"role": "user", "content": "Which one has the most upvotes?"},
-                    ],
-                    "provider": "gemini",
-                },
-            ]
-        }
-    }
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+    provider: Literal['deepseek', 'gemini'] = 'deepseek'
+    mode: Literal['chat', 'quiz', 'flashcards', 'summary'] = 'chat'
+    scope: Scope = Scope()
 
 
 class EvalResponse(BaseModel):
-    # Grounding check results from EvalAgent.
-    # `score` is 0.0–1.0: what fraction of the AI's factual claims
-    # could be verified against the retrieved source documents.
-    passed: bool             # true if score >= 0.75
+    passed: bool
     score: float
     claims_checked: int
     claims_grounded: int
-    ungrounded_claims: list[str]   # the specific claims that couldn't be verified
+    ungrounded_claims: list[str]
     explanation: str
+    citation_errors: list[str]
 
 
-class SearchResponse(BaseModel):
-    # Shared response shape for both /search and /chat.
-    # `sources` is list[dict] (untyped) so both the old 4-field shape
-    # and the new expanded shape (with body, author, etc.) both validate.
+class StudyResponse(BaseModel):
     query: str
     type: str
     brief: str
     eval: EvalResponse
     sources: list[dict]
+    community_context: list[dict]
     meta: dict
+    structured: dict | None = None
 
 
-class KeyResponse(BaseModel):
-    api_key: str
-    plan: str
-    daily_limit: int
-    note: str
+def _ensure_ui_session(request: Request) -> bool:
+    if session_is_valid(request):
+        return True
+    ui.navigate.to('/login')
+    return False
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+def _extract_citations(text: str) -> list[tuple[int, int]]:
+    pattern = re.compile(r'\[p(\d+):s(\d+)\]')
+    return [(int(m.group(1)), int(m.group(2))) for m in pattern.finditer(text)]
 
-@app.get("/", tags=["Meta"])
-def root():
-    # Simple directory — useful when someone hits the API root in a browser.
+
+@app.get('/health', tags=['Meta'])
+def health() -> dict:
+    return {'status': 'ok', 'timestamp': time.time()}
+
+
+@app.post('/auth/login', tags=['Auth'])
+def login(body: LoginRequest, response: Response) -> dict:
+    return login_response(body.password, response)
+
+
+@app.get('/documents', tags=['Documents'])
+async def documents(course: str | None = None) -> list[dict]:
+    return await list_documents(course=course)
+
+
+@app.post('/documents', tags=['Documents'], dependencies=[Depends(require_session)])
+async def upload_document(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    course: str | None = Form(None),
+    subreddits: str | None = Form(None),
+) -> dict:
+    filename = file.filename or ''
+    if file.content_type not in {'application/pdf', 'application/octet-stream'} and not filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail='Only PDF uploads are supported.')
+
+    payload = await file.read()
+    subreddit_list = [s.strip().removeprefix('r/') for s in (subreddits or '').split(',') if s.strip()]
+
+    document_id = await create_document(
+        title=title,
+        course=course or None,
+        status='processing',
+        total_pages=0,
+        storage_path='',
+        subreddits=subreddit_list or None,
+    )
+    storage_path = upload_pdf(document_id, filename or f'{document_id}.pdf', payload)
+    await update_document_status(document_id, status='processing', storage_path=storage_path)
+    job_id = enqueue_ingestion(document_id, storage_path)
+    return {'id': document_id, 'status': 'processing', 'job_id': job_id}
+
+
+@app.get('/documents/{document_id}/status', tags=['Documents'])
+async def document_status(document_id: str) -> dict:
+    document = await get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
     return {
-        "name": "Argus API",
-        "version": "1.0.0",
-        "demo_key": "demo-key-argus",
-        "docs": "/docs",
-        "endpoints": {
-            "POST /chat":          "Multi-turn chat grounded in real-time scraped data",
-            "POST /search":        "Single-query RAG pipeline (original endpoint)",
-            "POST /keys/generate": "Generate an API key",
-            "GET /health":         "Health check",
-        },
+        'id': document['id'],
+        'status': document['status'],
+        'total_pages': document.get('total_pages'),
+        'has_scan_warning': document.get('has_scan_warning', False),
+        'error_message': document.get('error_message'),
     }
 
 
-@app.get("/health", tags=["Meta"])
-def health():
-    return {"status": "ok", "timestamp": time.time()}
+@app.delete('/documents/{document_id}', tags=['Documents'], dependencies=[Depends(require_session)])
+async def remove_document(document_id: str) -> dict:
+    document = await get_document(document_id)
+    if document:
+        delete_pdf(document.get('storage_path') or '')
+    await delete_document(document_id)
+    return {'ok': True}
 
 
-@app.post("/search", response_model=SearchResponse, tags=["Research"])
-async def search(
-    body: SearchRequest,
-    # Depends(verify_api_key) runs verify_api_key() before this function.
-    # If the key is invalid or rate-limited it raises an HTTP exception and
-    # this handler never runs. If it passes, key_data is returned and injected here.
-    key_data: dict = Depends(verify_api_key),
-):
-    """
-    Single-turn research pipeline:
-
-    1. **SearchAgent** fans out to Reddit, HN, GitHub, Exa, etc. in parallel
-    2. **AnalysisAgent** embeds results + ranks by semantic similarity (RAG)
-    3. **SynthesisAgent** generates a brief via DeepSeek or Gemini
-    4. **EvalAgent** grounding-checks the brief against the sources
-
-    Returns the brief, grounding score, and all sources.
-    """
-    result = await pipeline.run(
-        query=body.query,
-        query_type=body.type,
-        provider=body.provider,
-        sources=body.sources,
-    )
-    return SearchResponse(
-        query=result.query,
-        type=result.query_type,
-        brief=result.brief,
-        # vars() turns the EvalResult dataclass into a plain dict so we can
-        # unpack it into the EvalResponse Pydantic model.
-        eval=EvalResponse(**vars(result.eval)),
-        sources=result.sources,
-        # Merge the pipeline's meta dict with the rate-limit info from the key check.
-        meta={**result.meta, "rate_limit": key_data},
-    )
+@app.get('/documents/{document_id}/file', dependencies=[Depends(require_session)], tags=['Documents'])
+async def get_document_file(document_id: str) -> FastAPIResponse:
+    document = await get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    blob = download_pdf(document['storage_path'])
+    return FastAPIResponse(content=blob, media_type='application/pdf')
 
 
-@app.post("/chat", response_model=SearchResponse, tags=["Chat"])
-async def chat(
-    body: ChatRequest,
-    key_data: dict = Depends(verify_api_key),
-):
-    """
-    Multi-turn chat endpoint.
-
-    Extracts the latest user message as the search query, runs the full RAG
-    pipeline against live data, then feeds the prior conversation turns into
-    the LLM so follow-up questions are answered in context.
-    """
-    user_messages = [m for m in body.messages if m.role == "user"]
+@app.post('/chat', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
+async def chat(body: ChatRequest) -> StudyResponse:
+    user_messages = [m for m in body.messages if m.role == 'user']
     if not user_messages:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="At least one user message is required.")
+        raise HTTPException(status_code=400, detail='At least one user message is required.')
 
-    # The most recent user message drives the data retrieval.
     query = user_messages[-1].content
-
-    # Everything before the final user message is "history" — it gets prepended
-    # to the LLM prompt so the model knows what was said earlier in the chat.
-    # If this is the first message, history is None and the pipeline runs normally.
-    history = (
-        [{"role": m.role, "content": m.content} for m in body.messages[:-1]]
-        if len(body.messages) > 1
-        else None
-    )
-
+    history = [{'role': m.role, 'content': m.content} for m in body.messages[:-1]] or None
     result = await pipeline.run(
         query=query,
-        query_type="topic",
+        query_type='study',
         provider=body.provider,
-        sources=body.sources,
         conversation_history=history,
+        scope=body.scope.model_dump(),
+        mode=body.mode,
     )
-    return SearchResponse(
+
+    return StudyResponse(
         query=result.query,
         type=result.query_type,
         brief=result.brief,
         eval=EvalResponse(**vars(result.eval)),
         sources=result.sources,
-        meta={**result.meta, "rate_limit": key_data},
+        community_context=result.community_context,
+        meta=result.meta,
+        structured=result.structured,
     )
 
 
-@app.post("/keys/generate", response_model=KeyResponse, tags=["Auth"])
-def create_key(plan: Literal["free", "pro"] = "free"):
-    """
-    Generate a new API key.
+@app.post('/search', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
+async def search(body: ChatRequest) -> StudyResponse:
+    return await chat(body)
 
-    - **free**: 10 requests/day
-    - **pro**: 1000 requests/day (hook up Stripe here in prod)
-    """
-    limits = {"free": 10, "pro": 1000}
-    key = generate_api_key(plan)
-    return KeyResponse(
-        api_key=key,
-        plan=plan,
-        daily_limit=limits[plan],
-        note="Save this key — it won't be shown again. Add to Postgres to activate in prod.",
-    )
+
+@ui.page('/')
+async def library_page(request: Request) -> None:
+    if not _ensure_ui_session(request):
+        return
+
+    ui.label('Argus Study Buddy').classes('text-3xl font-bold mb-6')
+
+    docs_table = ui.column().classes('w-full gap-2')
+
+    async def refresh_documents(course_filter: str | None = None) -> None:
+        docs_table.clear()
+        docs = await list_documents(course_filter or None)
+        with docs_table:
+            if not docs:
+                ui.label('No documents uploaded yet.').classes('text-gray-500')
+                return
+            for doc in docs:
+                with ui.row().classes('w-full items-center justify-between border rounded p-3'):
+                    with ui.column().classes('gap-0'):
+                        ui.label(doc['title']).classes('font-semibold')
+                        ui.label(f"Course: {doc.get('course') or 'none'}").classes('text-sm text-gray-600')
+                        ui.label(f"Status: {doc['status']}").classes('text-xs uppercase')
+                    ui.button('Delete', on_click=lambda d=doc['id']: delete_and_refresh(d)).props('color=negative flat')
+
+    async def delete_and_refresh(document_id: str) -> None:
+        await remove_document(document_id)
+        await refresh_documents(course_input.value)
+
+    selected_file: dict[str, bytes | str] = {}
+
+    with ui.card().classes('w-full max-w-5xl p-4 gap-4'):
+        ui.label('Upload textbook PDF').classes('text-xl font-semibold')
+        title_input = ui.input('Title').classes('w-full')
+        course_input = ui.input('Course (optional)').classes('w-full')
+        subreddit_input = ui.input('Subreddits (comma separated, optional)').classes('w-full')
+        status_label = ui.label('').classes('text-sm text-gray-700')
+
+        def on_upload(e) -> None:
+            payload = e.content.read()
+            selected_file['name'] = e.name
+            selected_file['content_type'] = e.type
+            selected_file['payload'] = payload
+            status_label.text = f'Selected file: {e.name}'
+
+        ui.upload(label='Choose PDF', auto_upload=True, on_upload=on_upload).props('accept=.pdf')
+
+        async def poll_status(document_id: str) -> None:
+            while True:
+                status = await document_status(document_id)
+                status_label.text = f"Document status: {status['status']}"
+                if status['status'] in {'ready', 'error'}:
+                    await refresh_documents(course_input.value)
+                    break
+                await asyncio.sleep(2)
+
+        async def submit_upload() -> None:
+            if 'payload' not in selected_file:
+                status_label.text = 'Select a PDF file first.'
+                return
+
+            from starlette.datastructures import UploadFile as StarletteUploadFile
+            import io
+
+            upload = StarletteUploadFile(
+                filename=str(selected_file['name']),
+                file=io.BytesIO(selected_file['payload']),
+                headers={'content-type': str(selected_file.get('content_type') or 'application/pdf')},
+            )
+            result = await upload_document(
+                file=upload,
+                title=title_input.value or str(selected_file['name']),
+                course=course_input.value or None,
+                subreddits=subreddit_input.value or None,
+            )
+            status_label.text = f"Queued ingestion job {result['job_id']}"
+            await poll_status(result['id'])
+
+        ui.button('Upload and process', on_click=submit_upload).props('color=primary')
+
+    with ui.row().classes('w-full max-w-5xl items-end gap-3 mt-6'):
+        filter_input = ui.input('Filter by course').classes('w-72')
+        ui.button('Refresh', on_click=lambda: refresh_documents(filter_input.value)).props('flat')
+        ui.button('Go to Study View', on_click=lambda: ui.navigate.to('/chat')).props('color=secondary')
+
+    await refresh_documents()
+
+
+@ui.page('/chat')
+async def chat_page(request: Request) -> None:
+    if not _ensure_ui_session(request):
+        return
+
+    docs = await list_documents()
+    doc_choices = {doc['id']: doc['title'] for doc in docs}
+    course_choices = sorted({doc.get('course') for doc in docs if doc.get('course')})
+
+    state: dict = {'messages': []}
+
+    ui.label('Study View').classes('text-3xl font-bold mb-4')
+
+    with ui.row().classes('w-full max-w-6xl gap-4'):
+        scope_type = ui.select(
+            options={'library': 'Whole library', 'course': 'This course', 'document': 'This document'},
+            value='library',
+            label='Scope',
+        ).classes('w-48')
+        course_select = ui.select(options=course_choices, value=course_choices[0] if course_choices else None, label='Course').classes('w-64')
+        doc_select = ui.select(options=doc_choices, value=next(iter(doc_choices.keys()), None), label='Document').classes('w-72')
+        mode_select = ui.select(
+            options={'chat': 'Chat', 'quiz': 'Quiz', 'flashcards': 'Flashcards', 'summary': 'Summary'},
+            value='chat',
+            label='Mode',
+        ).classes('w-48')
+
+    thread = ui.column().classes('w-full max-w-6xl border rounded p-4 gap-3 min-h-[320px]')
+
+    prompt = ui.textarea('Ask your textbook question').classes('w-full max-w-6xl')
+
+    async def render_chat_answer(answer: str, sources: list[dict]) -> None:
+        citations = _extract_citations(answer)
+        with thread:
+            ui.markdown(answer).classes('prose max-w-none')
+            if citations:
+                with ui.row().classes('gap-2 flex-wrap'):
+                    for page_number, sentence_idx in citations:
+                        target_doc = sources[0]['document_id'] if sources else None
+                        if not target_doc:
+                            continue
+                        label = f'[p{page_number}:s{sentence_idx}]'
+                        ui.link(label, f"/pdf/{target_doc}?page={page_number}").classes('text-blue-700 underline')
+
+    async def render_quiz(items: list[dict]) -> None:
+        with thread:
+            for item in items:
+                with ui.card().classes('w-full p-3'):
+                    ui.label(item.get('question', '')).classes('font-semibold')
+                    ui.separator()
+                    ui.label(item.get('answer', '')).classes('text-sm')
+                    ui.label(', '.join(item.get('citations', []))).classes('text-xs text-gray-600')
+
+    async def render_flashcards(items: list[dict]) -> None:
+        with thread:
+            for item in items:
+                with ui.expansion(item.get('front', 'Flashcard')).classes('w-full'):
+                    ui.label(item.get('back', ''))
+                    ui.label(', '.join(item.get('citations', []))).classes('text-xs text-gray-600')
+
+    async def render_summary(summary: dict) -> None:
+        lines: list[str] = []
+        if summary.get('title'):
+            lines.append(f"# {summary['title']}")
+        for section in summary.get('outline', []):
+            lines.append(f"## {section.get('heading', '')}")
+            for bullet in section.get('bullets', []):
+                lines.append(f'- {bullet}')
+        if summary.get('citations'):
+            lines.append('')
+            lines.append('Citations: ' + ', '.join(summary['citations']))
+        with thread:
+            ui.markdown('\n'.join(lines)).classes('prose max-w-none')
+
+    async def submit_question() -> None:
+        if not prompt.value:
+            return
+
+        scope_payload = {'type': scope_type.value}
+        if scope_type.value == 'document':
+            scope_payload['document_id'] = doc_select.value
+        if scope_type.value == 'course':
+            scope_payload['course'] = course_select.value
+
+        state['messages'].append({'role': 'user', 'content': prompt.value})
+        body = ChatRequest(
+            messages=[ChatMessage(**m) for m in state['messages']],
+            provider='deepseek',
+            mode=mode_select.value,
+            scope=Scope(**scope_payload),
+        )
+        result = await chat(body)
+
+        with thread:
+            ui.label(f"You: {prompt.value}").classes('text-sm text-gray-700')
+
+        if mode_select.value == 'chat':
+            await render_chat_answer(result.brief, result.sources)
+            state['messages'].append({'role': 'assistant', 'content': result.brief})
+        elif mode_select.value == 'quiz':
+            await render_quiz((result.structured or {}).get('items', []))
+        elif mode_select.value == 'flashcards':
+            await render_flashcards((result.structured or {}).get('items', []))
+        else:
+            await render_summary(result.structured or {})
+
+        prompt.value = ''
+
+    ui.button('Send', on_click=submit_question).props('color=primary')
+
+
+@ui.page('/pdf/{document_id}')
+async def pdf_page(request: Request, document_id: str) -> None:
+    if not _ensure_ui_session(request):
+        return
+
+    document = await get_document(document_id)
+    if not document:
+        ui.label('Document not found').classes('text-red-600')
+        return
+
+    query = dict(request.query_params)
+    try:
+        starting_page = int(query.get('page', '1'))
+    except ValueError:
+        starting_page = 1
+
+    ui.label(document['title']).classes('text-2xl font-semibold mb-2')
+    page_number = ui.number('Page', value=starting_page, min=1, precision=0).classes('w-32')
+
+    file_url = f"/documents/{quote(document_id)}/file"
+    if PdfViewer is None:
+        ui.label('nicegui-pdf is not installed correctly.').classes('text-red-600')
+        return
+
+    viewer = PdfViewer(file_url, page=starting_page).classes('w-full h-[80vh]')
+
+    def on_page_change() -> None:
+        try:
+            viewer.page = int(page_number.value)
+        except Exception:
+            pass
+
+    page_number.on('change', on_page_change)
+
+
+@ui.page('/login')
+def login_page() -> None:
+    with ui.card().classes('absolute-center w-96 max-w-[90vw] p-6 gap-4'):
+        ui.label('Argus Study Buddy').classes('text-2xl font-semibold text-center')
+        password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full')
+        error = ui.label('').classes('text-sm text-red-600')
+
+        async def submit() -> None:
+            escaped = json.dumps(password.value or '')
+            script = (
+                "(async () => {"
+                "const r = await fetch('/auth/login', {"
+                "method: 'POST',"
+                "headers: {'Content-Type': 'application/json'},"
+                f"body: JSON.stringify({{password: {escaped}}})"
+                "});"
+                "if (r.ok) { window.location.href = '/'; return 'ok'; }"
+                "return 'bad';"
+                "})();"
+            )
+            result = await ui.run_javascript(script, timeout=10)
+            if result != 'ok':
+                error.text = 'Invalid password.'
+
+        ui.button('Log in', on_click=submit).props('color=primary').classes('w-full')
+
+if os.environ.get('ARGUS_ENABLE_NICEGUI', '1') == '1':
+    ui.run_with(app, title='Argus Study Buddy')
