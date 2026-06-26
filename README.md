@@ -57,9 +57,9 @@ Open `/login`, sign in with Google, upload a PDF, go to `/chat`.
 | `GOOGLE_REDIRECT_URI` | Yes | Default: `http://localhost:8000/auth/google/callback` |
 | `GEMINI_API_KEY` | Yes | PDF embeddings |
 | `DEEPSEEK_API_KEY` | Yes* | Chat answers (*or use Gemini as provider) |
-| `DATABASE_URL` | Recommended | Postgres persistence — schema auto-applies on startup |
-| `SUPABASE_URL` | Optional | Cloud PDF storage |
-| `SUPABASE_KEY` | Optional | Cloud PDF storage (service role key) |
+| `DATABASE_URL` | Recommended | Postgres URI from Supabase **Connect** or **Settings → Database** |
+| `SUPABASE_URL` | Optional | `https://xxxx.supabase.co` from **Settings → API → Project URL** |
+| `SUPABASE_KEY` | Optional | **`service_role`** secret from **Settings → API** (not `anon`) |
 | `ENVIRONMENT` | Optional | Set to `production` for secure cookies |
 
 No `REDIS_URL`. No `SUPABASE_BUCKET` (defaults to `argus-pdfs`, created automatically). No manual `psql` step.
@@ -100,23 +100,109 @@ ADMIN_EMAIL=you@gmail.com
 1. [DeepSeek Platform](https://platform.deepseek.com/) → **API Keys** → create one
 2. Paste into `.env`
 
-### Supabase (persistence) — copy two values, nothing else
+### Supabase setup (database + PDF storage)
 
-For data that survives restarts:
+Argus uses Supabase for two things only:
 
-1. Create a free project at [supabase.com](https://supabase.com/)
-2. **Project Settings → Database → Connection string** (URI) → `DATABASE_URL`
-3. **Project Settings → API → Project URL** → `SUPABASE_URL`
-4. **Project Settings → API → service_role** (secret) → `SUPABASE_KEY`
+| `.env` variable | What it is | Where to get it |
+|-----------------|------------|-----------------|
+| `DATABASE_URL` | Postgres connection string | **Connect** button (top of project) or **Project Settings → Database** |
+| `SUPABASE_URL` | Your project’s API base URL | **Project Settings → API → Project URL** |
+| `SUPABASE_KEY` | Server secret for Storage uploads | **Project Settings → API → `service_role`** (not `anon`) |
 
-That's it. On first `make app`:
+You do **not** need to create a Storage bucket, run `psql`, or enable pgvector manually — Argus applies the schema on startup and creates the `argus-pdfs` bucket on first upload.
 
-- `db/schema.sql` runs automatically against `DATABASE_URL`
-- PDF bucket `argus-pdfs` is created automatically when you upload
+#### Step 0 — Create a project
 
-Skip Supabase entirely for a quick local trial — the app uses in-memory storage and `uploaded_pdfs/` on disk (data lost on restart).
+1. Go to [supabase.com/dashboard](https://supabase.com/dashboard) and sign in.
+2. Click **New project**.
+3. Pick an organization, name, and region.
+4. Set a **database password** — copy it somewhere safe. You need it for `DATABASE_URL` and cannot recover it later (only reset).
+5. Wait until the project finishes provisioning (~1–2 minutes).
 
----
+#### Step 1 — `DATABASE_URL` (Postgres)
+
+**Option A — Connect button (easiest)**
+
+1. Open your project in the dashboard.
+2. Click the green **Connect** button (top center of the project home page).
+3. Open the **ORMs** or **Connection string** tab.
+4. Copy the **URI** connection string. It looks like:
+   ```
+   postgresql://postgres.[PROJECT_REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres
+   ```
+   or a direct form:
+   ```
+   postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres
+   ```
+5. Replace `[YOUR-PASSWORD]` with the database password from Step 0.
+6. Paste into `.env` as `DATABASE_URL=...`
+
+**Option B — Project Settings**
+
+1. Left sidebar → **Project Settings** (gear icon at the bottom).
+2. Click **Database**.
+3. Scroll to **Connection string** / **Connection info**.
+4. Choose **URI**, copy the string, replace the password placeholder, paste into `DATABASE_URL`.
+
+**Which string to use?** Any of **Session pooler**, **Direct connection**, or **Transaction pooler** works for Argus. If one fails to connect, try **Session pooler** (port `5432` on the pooler host) or **Direct connection**.
+
+#### Step 2 — `SUPABASE_URL` (Project URL)
+
+1. Left sidebar → **Project Settings** (gear).
+2. Click **API** (some dashboards label this **Data API**).
+3. Under **Project URL**, copy the value. It looks like:
+   ```
+   https://abcdefghijklmnop.supabase.co
+   ```
+4. Paste into `.env`:
+   ```
+   SUPABASE_URL=https://abcdefghijklmnop.supabase.co
+   ```
+
+#### Step 3 — `SUPABASE_KEY` (service role secret)
+
+Stay on the same **Project Settings → API** page:
+
+1. Find the **Project API keys** section.
+2. Copy the **`service_role`** key (labeled **secret** — click **Reveal** if hidden).
+3. Paste into `.env`:
+   ```
+   SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+   ```
+
+**Important:** Use `service_role`, not `anon`. The `anon` key is for browsers; Argus runs on the server and needs `service_role` to upload PDFs.
+
+**New-style keys:** If your dashboard shows `sb_secret_...` instead of a JWT, use the **secret** key marked for server/backend use (same role as `service_role`).
+
+#### Example `.env` block
+
+```env
+DATABASE_URL=postgresql://postgres.xxxxxxxxxxxx:YOUR_DB_PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
+SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### What Argus does automatically
+
+On `make app` with these set:
+
+- Runs `db/schema.sql` against `DATABASE_URL` (tables + pgvector index)
+- On first PDF upload, creates the `argus-pdfs` Storage bucket if missing
+
+#### Skip Supabase for a quick trial
+
+Leave all three blank. Argus uses in-memory data and stores PDFs in `uploaded_pdfs/` on disk. Everything is lost when you restart the app.
+
+#### Supabase troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `password authentication failed` | Wrong DB password in `DATABASE_URL` — reset under **Project Settings → Database → Reset database password**, then update `.env` |
+| `connection refused` / timeout | Project may be paused (free tier) — open the dashboard to wake it; try **Session pooler** URI instead of Direct |
+| Storage upload fails | `SUPABASE_KEY` must be `service_role` / secret key, not `anon` |
+| `extension "vector" does not exist` | Rare on hosted Supabase (usually pre-enabled); contact Supabase support or enable **vector** in **Database → Extensions** |
+
 
 ## Setup
 
@@ -157,4 +243,4 @@ make test    # optional
 - **Login fails** — `GOOGLE_REDIRECT_URI` must match Google Cloud Console exactly
 - **Upload stuck on `processing`** — check terminal for ingestion errors (usually `GEMINI_API_KEY`)
 - **Chat errors** — check `DEEPSEEK_API_KEY`
-- **DB errors on startup** — verify `DATABASE_URL`; ensure Supabase project is awake
+- **DB errors on startup** — see [Supabase troubleshooting](#supabase-troubleshooting) below; check `DATABASE_URL` password and that the project is not paused
