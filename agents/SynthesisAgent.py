@@ -25,7 +25,6 @@ class SynthesisAgent:
         'You are a precise study assistant grounded in textbook excerpts. '
         'Every factual claim must include one or more citation tags copied verbatim from context '
         'using the format [pX:sY]. Never invent page or sentence numbers. '
-        'Never cite community context as textbook evidence. '
         'Use $...$ for inline math and $$...$$ for display math in markdown answers. '
         'If the textbook context does not contain enough evidence to answer, say so clearly.'
     )
@@ -42,29 +41,15 @@ class SynthesisAgent:
             lines.append(f'Chunk {idx}:\n{tagged}')
         return '\n\n'.join(lines) if lines else 'No textbook chunks were retrieved.'
 
-    def _build_community_context(self, items: list[dict]) -> str:
-        """Format supplementary Reddit snippets separately from textbook context."""
-        if not items:
-            return 'No community context configured for this scope.'
-        snippets: list[str] = []
-        for item in items[:12]:
-            snippets.append(
-                f"[{item.get('source', 'reddit')}:{item.get('subreddit', 'unknown')}] "
-                f"{item.get('title', '')}\n{item.get('body', '')[:240]}"
-            )
-        return '\n\n'.join(snippets)
-
     async def run(
         self,
         analysis: AnalysisResult,
-        community_context: list[dict],
         mode: str,
         ai_client: AIClient,
         conversation_history: list[dict] | None = None,
     ) -> SynthesisResult:
         """Generate the final answer or structured study artifact."""
         textbook_context = self._build_textbook_context(analysis.chunks)
-        community_text = self._build_community_context(community_context)
 
         mode_prompt = {
             'chat': 'Answer naturally in markdown with concise explanations, LaTeX math where helpful, and explicit [pX:sY] citations.',
@@ -85,7 +70,6 @@ class SynthesisAgent:
         user_prompt = (
             f'User question: {analysis.query}\n\n'
             f'Textbook context:\n{textbook_context}\n\n'
-            f'Community context (supplementary only, never as textbook citation):\n{community_text}\n\n'
             f'Mode: {mode}\n'
             f'{mode_prompt}'
         )

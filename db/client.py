@@ -53,7 +53,6 @@ async def create_document(
     status: str,
     total_pages: int,
     storage_path: str,
-    subreddits: list[str] | None,
 ) -> str:
     """Insert one document row and return its UUID as text."""
     pool = await get_pool()
@@ -67,7 +66,6 @@ async def create_document(
             'total_pages': total_pages,
             'storage_path': storage_path,
             'uploaded_at': time.time(),
-            'subreddits': subreddits,
             'has_scan_warning': False,
             'error_message': None,
         }
@@ -78,7 +76,7 @@ async def create_document(
         row = await conn.fetchrow(
             """
             INSERT INTO documents (title, course, status, total_pages, storage_path, subreddits)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, NULL)
             RETURNING id::text
             """,
             title,
@@ -86,7 +84,6 @@ async def create_document(
             status,
             total_pages,
             storage_path,
-            subreddits,
         )
     return row['id']
 
@@ -151,7 +148,7 @@ async def get_document(document_id: str) -> dict | None:
         row = await conn.fetchrow(
             """
             SELECT id::text, title, course, status, total_pages, storage_path,
-                   uploaded_at, subreddits, has_scan_warning, error_message
+                   uploaded_at, has_scan_warning, error_message
             FROM documents
             WHERE id = $1::uuid
             """,
@@ -175,7 +172,7 @@ async def list_documents(course: str | None = None) -> list[dict]:
             rows = await conn.fetch(
                 """
                 SELECT id::text, title, course, status, total_pages, storage_path,
-                       uploaded_at, subreddits, has_scan_warning, error_message
+                       uploaded_at, has_scan_warning, error_message
                 FROM documents
                 WHERE course = $1
                 ORDER BY uploaded_at DESC
@@ -186,7 +183,7 @@ async def list_documents(course: str | None = None) -> list[dict]:
             rows = await conn.fetch(
                 """
                 SELECT id::text, title, course, status, total_pages, storage_path,
-                       uploaded_at, subreddits, has_scan_warning, error_message
+                       uploaded_at, has_scan_warning, error_message
                 FROM documents
                 ORDER BY uploaded_at DESC
                 """
@@ -325,11 +322,11 @@ async def retrieve_similar_chunks(query_embedding: list[float], document_ids: li
                 c.sentence_end_idx,
                 c.text,
                 c.bbox,
-                1 - (c.embedding <=> $1::vector) AS similarity
+                1 - (c.embedding::halfvec(3072) <=> $1::halfvec(3072)) AS similarity
             FROM document_chunks c
             JOIN documents d ON d.id = c.document_id
             WHERE c.document_id = ANY($2::uuid[])
-            ORDER BY c.embedding <=> $1::vector
+            ORDER BY c.embedding::halfvec(3072) <=> $1::halfvec(3072)
             LIMIT $3
             """,
             embedding_str,
@@ -359,31 +356,3 @@ async def get_sentence(document_id: str, page_number: int, sentence_idx: int) ->
             sentence_idx,
         )
     return row['text'] if row else None
-
-
-async def get_scope_subreddits(document_ids: list[str]) -> list[str]:
-    """Collect subreddit names configured on the documents in scope."""
-    if not document_ids:
-        return []
-    pool = await get_pool()
-    if pool is None:
-        result: set[str] = set()
-        for document_id in document_ids:
-            document = _memory_documents.get(document_id)
-            if not document:
-                continue
-            for subreddit in document.get('subreddits') or []:
-                if subreddit:
-                    result.add(subreddit)
-        return sorted(result)
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT DISTINCT unnest(subreddits) AS subreddit
-            FROM documents
-            WHERE id = ANY($1::uuid[]) AND subreddits IS NOT NULL
-            """,
-            document_ids,
-        )
-    result = [r['subreddit'] for r in rows if r['subreddit']]
-    return sorted(set(result))

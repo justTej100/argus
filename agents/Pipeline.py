@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from agents.AnalysisAgent import AnalysisAgent
-from agents.ContextAgent import ContextAgent
 from agents.EvalAgent import EvalAgent, EvalResult
 from agents.SynthesisAgent import SynthesisAgent
 
@@ -18,15 +17,13 @@ class PipelineResult:
     brief: str
     eval: EvalResult
     sources: list[dict]
-    community_context: list[dict]
     meta: dict[str, Any]
     structured: dict | None
 
 
 class ResearchPipeline:
-    """Coordinate retrieval, community context, synthesis, and eval."""
+    """Coordinate retrieval, synthesis, and eval."""
     def __init__(self) -> None:
-        self.context_agent = ContextAgent()
         self.analysis_agent = AnalysisAgent()
         self.synthesis_agent = SynthesisAgent()
         self.eval_agent = EvalAgent()
@@ -35,7 +32,6 @@ class ResearchPipeline:
         self,
         query: str,
         query_type: str = 'study',
-        provider: str = 'deepseek',
         conversation_history: list[dict] | None = None,
         scope: dict | None = None,
         mode: str = 'chat',
@@ -43,18 +39,25 @@ class ResearchPipeline:
         """Execute the full question-answering flow for one prompt."""
         from ai.clients import get_client
 
-        ai_client = get_client(provider)  # type: ignore[arg-type]
+        ai_client = get_client()
 
         analysis = await self.analysis_agent.run(query=query, scope=scope)
-        community = await self.context_agent.run(query=query, document_ids=analysis.document_ids)
+        if not analysis.document_ids:
+            raise ValueError(
+                'No ready textbooks in this scope. Upload a PDF on the Library page and wait until status is Ready.'
+            )
+        if not analysis.chunks:
+            raise ValueError(
+                'No matching passages found for this question. Try rephrasing or widening the scope.'
+            )
+
         synthesis = await self.synthesis_agent.run(
             analysis=analysis,
-            community_context=community.items,
             mode=mode,
             ai_client=ai_client,
             conversation_history=conversation_history,
         )
-        eval_result = await self.eval_agent.run(synthesis=synthesis, analysis=analysis, ai_client=ai_client)
+        eval_result = await self.eval_agent.run(synthesis=synthesis, analysis=analysis)
 
         textbook_sources = [
             {
@@ -77,7 +80,6 @@ class ResearchPipeline:
             brief=synthesis.brief,
             eval=eval_result,
             sources=textbook_sources,
-            community_context=community.items,
             structured=synthesis.structured,
             meta={
                 'provider': ai_client.provider,

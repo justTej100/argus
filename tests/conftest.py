@@ -29,7 +29,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     state: dict[str, dict] = {}
 
-    async def create_document(title: str, course: str | None, status: str, total_pages: int, storage_path: str, subreddits: list[str] | None) -> str:
+    async def create_document(title: str, course: str | None, status: str, total_pages: int, storage_path: str) -> str:
         doc_id = f'doc-{len(state) + 1}'
         state[doc_id] = {
             'id': doc_id,
@@ -38,7 +38,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             'status': status,
             'total_pages': total_pages,
             'storage_path': storage_path,
-            'subreddits': subreddits,
             'has_scan_warning': False,
             'error_message': None,
         }
@@ -109,8 +108,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 citation_errors=[],
             ),
             sources=[{'document_id': 'doc-1', 'page_number': 1, 'sentence_start_idx': 0, 'sentence_end_idx': 1, 'text': 'abc', 'document_title': 'Book', 'source_type': 'textbook'}],
-            community_context=[],
-            meta={'mode': 'chat'},
+            meta={'mode': 'chat', 'provider': 'gemini'},
             structured=None,
         )
 

@@ -8,7 +8,6 @@ def test_logout_clears_session(authenticated_client):
         '/chat',
         json={
             'messages': [{'role': 'user', 'content': 'hello'}],
-            'provider': 'deepseek',
             'mode': 'chat',
             'scope': {'type': 'library'},
         },
@@ -26,7 +25,6 @@ def test_logout_clears_session(authenticated_client):
         '/chat',
         json={
             'messages': [{'role': 'user', 'content': 'hello'}],
-            'provider': 'deepseek',
             'mode': 'chat',
             'scope': {'type': 'library'},
         },
@@ -39,7 +37,6 @@ def test_chat_requires_session(client):
         '/chat',
         json={
             'messages': [{'role': 'user', 'content': 'hello'}],
-            'provider': 'deepseek',
             'mode': 'chat',
             'scope': {'type': 'library'},
         },
@@ -51,7 +48,7 @@ def test_upload_enqueues_and_status_polling(authenticated_client):
     upload = authenticated_client.post(
         '/documents',
         files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
-        data={'title': 'Linear Algebra', 'course': 'math', 'subreddits': 'math,learnmath'},
+        data={'title': 'Linear Algebra', 'course': 'math'},
     )
     assert upload.status_code == 200
     payload = upload.json()

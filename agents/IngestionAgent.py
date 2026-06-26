@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-"""PDF ingestion job used by the background RQ worker."""
+"""PDF ingestion job used by the background worker."""
 
-import asyncio
 import re
 
 import fitz
 import pymupdf4llm
 import spacy
-from ai.clients import embed
+from ai.clients import embed_many
 from db.client import replace_document_content, update_document_status
 from storage import download_pdf
 
@@ -23,7 +22,7 @@ def _segment_sentences(text: str) -> list[str]:
     return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
 
 
-def _build_chunks(page_number: int, sentences: list[str], window_size: int = 4, overlap: int = 1) -> list[dict]:
+def _build_chunks(page_number: int, sentences: list[str], window_size: int = 6, overlap: int = 1) -> list[dict]:
     """Build overlapping sentence windows for retrieval and embedding."""
     chunks: list[dict] = []
     if not sentences:
@@ -160,7 +159,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
         )
         return
 
-    embeddings = await asyncio.gather(*(embed(chunk['text']) for chunk in all_chunks))
+    embeddings = await embed_many([chunk['text'] for chunk in all_chunks])
     for chunk, chunk_embedding in zip(all_chunks, embeddings):
         chunk['embedding'] = chunk_embedding
 

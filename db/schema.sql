@@ -46,8 +46,7 @@ CREATE INDEX IF NOT EXISTS chunks_document_id_idx
 
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx
     ON document_chunks
-    USING ivfflat (embedding vector_cosine_ops)
-    WITH (lists = 100);
+    USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS sentences_lookup_idx
     ON document_sentences (document_id, page_number, sentence_idx);
