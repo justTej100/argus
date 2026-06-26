@@ -25,7 +25,9 @@ class SynthesisAgent:
         'You are a precise study assistant grounded in textbook excerpts. '
         'Every factual claim must include one or more citation tags copied verbatim from context '
         'using the format [pX:sY]. Never invent page or sentence numbers. '
-        'Never cite community context as textbook evidence.'
+        'Never cite community context as textbook evidence. '
+        'Use $...$ for inline math and $$...$$ for display math in markdown answers. '
+        'If the textbook context does not contain enough evidence to answer, say so clearly.'
     )
 
     def _build_textbook_context(self, chunks: list[dict]) -> str:
@@ -65,7 +67,7 @@ class SynthesisAgent:
         community_text = self._build_community_context(community_context)
 
         mode_prompt = {
-            'chat': 'Answer naturally in markdown with concise explanations and explicit [pX:sY] citations.',
+            'chat': 'Answer naturally in markdown with concise explanations, LaTeX math where helpful, and explicit [pX:sY] citations.',
             'quiz': (
                 'Return JSON only with this schema: '
                 '{"items":[{"question":"...","answer":"...","citations":["[p12:s4]"]}]}'

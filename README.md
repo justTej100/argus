@@ -10,44 +10,47 @@ Upload PDFs, ask questions, and get answers with inline textbook citations in th
 - Redis + RQ for background PDF ingestion jobs
 - Supabase Storage for original PDFs
 - Supabase Postgres + pgvector for chunk embeddings and metadata
+- pymupdf4llm for LaTeX/math-aware PDF → markdown extraction (with OCR fallback)
 - Gemini embeddings via `gemini-embedding-001`
 - DeepSeek as default synthesis provider (`provider` can still be set to `gemini`)
 - Optional subreddit context is separated and tagged as `source_type: community`
 
 ## File Map
 
-- [backend/main.py](backend/main.py) is the app entrypoint: API routes, login, and NiceGUI pages.
-- [backend/agents/IngestionAgent.py](backend/agents/IngestionAgent.py) handles PDF parsing, sentence splitting, chunking, and embeddings.
-- [backend/agents/AnalysisAgent.py](backend/agents/AnalysisAgent.py) performs scoped vector retrieval.
-- [backend/agents/ContextAgent.py](backend/agents/ContextAgent.py) fetches optional subreddit context.
-- [backend/agents/SynthesisAgent.py](backend/agents/SynthesisAgent.py) builds the final response for each mode.
-- [backend/agents/EvalAgent.py](backend/agents/EvalAgent.py) checks grounding and citation integrity.
-- [backend/db/client.py](backend/db/client.py) owns the database pool and SQL helpers.
-- [backend/storage.py](backend/storage.py) stores PDFs in Supabase or a local fallback.
-- [backend/jobs.py](backend/jobs.py) enqueues ingestion jobs in RQ.
-- [backend/auth.py](backend/auth.py) manages the session cookie.
+- [main.py](main.py) is the app entrypoint: API routes, login, and NiceGUI pages.
+- [agents/IngestionAgent.py](agents/IngestionAgent.py) handles PDF parsing, sentence splitting, chunking, and embeddings.
+- [agents/AnalysisAgent.py](agents/AnalysisAgent.py) performs scoped vector retrieval.
+- [agents/SynthesisAgent.py](agents/SynthesisAgent.py) builds the final response for each mode.
+- [agents/EvalAgent.py](agents/EvalAgent.py) checks grounding and citation integrity.
+- [agents/ContextAgent.py](agents/ContextAgent.py) fetches optional community context.
+- [db/client.py](db/client.py) owns the database pool and SQL helpers.
+- [storage.py](storage.py) stores PDFs in Supabase or a local fallback.
+- [jobs.py](jobs.py) enqueues ingestion jobs in RQ.
+- [auth.py](auth.py) manages Google OAuth and the session cookie.
+- [ui/theme.py](ui/theme.py) applies the ice/cyber NiceGUI theme and KaTeX rendering.
 
 ## Implementation Notes
 
 - Citation tags use the exact format `[pX:sY]` and are verified against the stored sentence table.
 - Community context is never treated as textbook evidence.
-- The app is designed for one person, so the auth and UI are intentionally simple.
+- LaTeX-heavy PDFs are ingested via pymupdf4llm markdown extraction instead of raw `get_text()`.
+- Chat answers support `$...$` and `$$...$$` math rendered with KaTeX.
 
 ## Agent Pipeline
 
 1. IngestionAgent
-   - Parse PDF with PyMuPDF
-   - Split sentences with spaCy blank pipeline + sentencizer
-   - Build overlapping sentence windows
-   - Embed chunks and save with page/sentence metadata
+   - Extract per-page markdown with pymupdf4llm
+   - OCR fallback for image-only pages
+   - Split sentences with spaCy sentencizer
+   - Build overlapping sentence windows and embed chunks
 2. AnalysisAgent
    - Resolve scope (`document`, `course`, or `library`)
    - Run pgvector similarity search over scoped documents
 3. ContextAgent
-   - If scope documents define `subreddits`, fetch supplementary Reddit context
+   - Optional supplementary community context (stub)
 4. SynthesisAgent
    - Modes: `chat`, `quiz`, `flashcards`, `summary`
-   - Inject textbook chunks with citation tags
+   - Inject textbook chunks with citation tags and LaTeX math in answers
 5. EvalAgent
    - Grounding check
    - Citation verification for every `[pX:sY]`
@@ -56,7 +59,11 @@ Upload PDFs, ask questions, and get answers with inline textbook citations in th
 
 Use exactly these variables:
 
-- `APP_PASSWORD`
+- `SECRET_KEY`
+- `ADMIN_EMAIL`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
 - `REDIS_URL`
 - `SUPABASE_URL`
 - `SUPABASE_KEY`
@@ -67,6 +74,13 @@ Use exactly these variables:
 Optional for persistence and retrieval across restarts:
 
 - `DATABASE_URL`
+
+### Google OAuth setup
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), create an OAuth 2.0 Client ID (Web application).
+2. Add `GOOGLE_REDIRECT_URI` as an authorized redirect URI (default: `http://localhost:8000/auth/google/callback`).
+3. Copy the client ID and secret into `.env`.
+4. Set `ADMIN_EMAIL` to the Google account(s) allowed to sign in (comma-separated for multiple).
 
 ## Setup
 
@@ -85,7 +99,7 @@ make install
 3. Apply DB schema if you want persistent storage
 
 ```bash
-psql "$DATABASE_URL" -f backend/db/schema.sql
+psql "$DATABASE_URL" -f db/schema.sql
 ```
 
 4. Run app + worker
@@ -97,14 +111,22 @@ make run
 Or run separately:
 
 ```bash
-make backend
+make app
 make worker
+```
+
+5. Run tests
+
+```bash
+make test
 ```
 
 ## Routes
 
 - `GET /health`
-- `POST /auth/login`
+- `GET /auth/google`
+- `GET /auth/google/callback`
+- `GET /logout`
 - `GET /documents`
 - `POST /documents` (session required)
 - `GET /documents/{id}/status`
@@ -122,9 +144,9 @@ NiceGUI pages:
 
 ## End-to-End Flow
 
-1. Login with `APP_PASSWORD`
+1. Sign in with Google at `/login`
 2. Upload a PDF in library page
 3. Worker ingests and marks document `ready`
 4. Ask a question in `/chat`
-5. Answer contains `[pX:sY]` tags
+5. Answer contains `[pX:sY]` tags and optional LaTeX math
 6. Click a citation to open `/pdf/{document_id}?page=X`

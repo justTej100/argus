@@ -18,11 +18,12 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     os.environ['ARGUS_ENABLE_NICEGUI'] = '0'
-    os.environ['APP_PASSWORD'] = 'test-password'
+    os.environ['SECRET_KEY'] = 'test-secret-key'
+    os.environ['ADMIN_EMAIL'] = 'admin@test.com'
 
-    backend_dir = Path(__file__).resolve().parents[1]
-    if str(backend_dir) not in sys.path:
-        sys.path.insert(0, str(backend_dir))
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
     import main  # type: ignore
 
@@ -91,30 +92,41 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, 'download_pdf', lambda _path: b'%PDF-1.4\n%test')
     monkeypatch.setattr(main, 'delete_pdf', lambda _path: None)
 
-    class DummyEval:
-        passed = True
-        score = 1.0
-        claims_checked = 1
-        claims_grounded = 1
-        ungrounded_claims = []
-        explanation = 'ok'
-        citation_errors = []
+    from types import SimpleNamespace
 
-    class DummyResult:
-        query = 'q'
-        query_type = 'study'
-        brief = 'Answer [p1:s0]'
-        eval = DummyEval()
-        sources = [{'document_id': 'doc-1', 'page_number': 1, 'sentence_start_idx': 0, 'sentence_end_idx': 1, 'text': 'abc', 'document_title': 'Book', 'source_type': 'textbook'}]
-        community_context = []
-        meta = {'mode': 'chat'}
-        structured = None
+    def make_dummy_result() -> SimpleNamespace:
+        return SimpleNamespace(
+            query='q',
+            query_type='study',
+            brief='Answer [p1:s0]',
+            eval=SimpleNamespace(
+                passed=True,
+                score=1.0,
+                claims_checked=1,
+                claims_grounded=1,
+                ungrounded_claims=[],
+                explanation='ok',
+                citation_errors=[],
+            ),
+            sources=[{'document_id': 'doc-1', 'page_number': 1, 'sentence_start_idx': 0, 'sentence_end_idx': 1, 'text': 'abc', 'document_title': 'Book', 'source_type': 'textbook'}],
+            community_context=[],
+            meta={'mode': 'chat'},
+            structured=None,
+        )
 
     async def fake_run(**_kwargs):
-        return DummyResult()
+        return make_dummy_result()
 
     monkeypatch.setattr(main.pipeline, 'run', fake_run)
 
     app_client = TestClient(main.app)
     app_client.state_store = state  # type: ignore[attr-defined]
     return app_client
+
+
+@pytest.fixture
+def authenticated_client(client: TestClient) -> TestClient:
+    from auth import COOKIE_NAME, issue_session_token
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    return client

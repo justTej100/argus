@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from typing import Literal
 import httpx
 
-
-
 """
 Provider wrappers for chat completion and embeddings.
 Gemini is the default for everything (embeddings and chat) 
