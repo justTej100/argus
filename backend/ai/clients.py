@@ -1,38 +1,32 @@
 from __future__ import annotations
 
-"""Provider wrappers for chat completion and embeddings.
-
-DeepSeek is used for synthesis by default, while Gemini supplies embeddings.
-This module keeps the provider-specific HTTP details in one place so the rest
-of the app can stay provider-agnostic.
-"""
-
 import os
 from dataclasses import dataclass
 from typing import Literal
-import hashlib
-import random
-
 import httpx
 
-ModelProvider = Literal["deepseek", "gemini"]
 
-PREVIEW_RESPONSE = (
-    "[Preview mode] Add DEEPSEEK_API_KEY or GEMINI_API_KEY for chat synthesis."
-)
+
+"""
+Provider wrappers for chat completion and embeddings.
+Gemini is the default for everything (embeddings and chat) 
+unless you specify "deepseek" (chat only).
+"""
+
+ModelProvider = Literal["deepseek", "gemini"]
 
 
 @dataclass
 class AIClient:
-    """Holds everything needed to make a request to one AI provider."""
     provider: ModelProvider
     model: str
     api_key: str
     base_url: str
 
 
-def get_client(provider: ModelProvider = "deepseek") -> AIClient:
+def get_client(provider: ModelProvider = "gemini") -> AIClient:
     """Return the chat-completion client for the requested provider."""
+    
     if provider == "deepseek":
         return AIClient(
             provider="deepseek",
@@ -40,6 +34,7 @@ def get_client(provider: ModelProvider = "deepseek") -> AIClient:
             api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
             base_url="https://api.deepseek.com/v1",
         )
+    
     if provider == "gemini":
         return AIClient(
             provider="gemini",
@@ -47,6 +42,7 @@ def get_client(provider: ModelProvider = "deepseek") -> AIClient:
             api_key=os.environ.get("GEMINI_API_KEY", ""),
             base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         )
+    
     raise ValueError(f"Unknown provider: {provider}")
 
 
@@ -59,15 +55,10 @@ async def complete(
     json_mode: bool = False,
     extra_messages: list[dict] | None = None,
 ) -> str:
+    
     """Send a completion request and return the assistant text."""
     if not client.api_key:
-        if json_mode:
-            # EvalAgent parses this, so return valid JSON with neutral values.
-            return (
-                '{"claims": [], "grounding_score": 0.0, '
-                '"explanation": "No API key configured — eval skipped."}'
-            )
-        return PREVIEW_RESPONSE
+        raise RuntimeError(f"Missing API key for {client.provider}.")
 
     headers = {
         "Authorization": f"Bearer {client.api_key}",
@@ -100,17 +91,13 @@ async def complete(
 
 
 async def embed(text: str) -> list[float]:
-    """Embed text with Gemini, or a deterministic fallback in preview mode."""
     """Embed text with Gemini gemini-embedding-001."""
+    
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        seed = int(hashlib.md5(text.encode()).hexdigest(), 16)
-        rng = random.Random(seed)
-        vec = [rng.gauss(0, 1) for _ in range(3072)]
-        magnitude = sum(x ** 2 for x in vec) ** 0.5
-        return [x / magnitude for x in vec]
+        raise RuntimeError("Missing GEMINI_API_KEY.")
 
-    async with httpx.AsyncClient(timeout=30) as http:
+    async with httpx.AsyncClient(timeout=60) as http:
         r = await http.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key={api_key}",
             headers={"Content-Type": "application/json"},
@@ -119,8 +106,10 @@ async def embed(text: str) -> list[float]:
                 "content": {"parts": [{"text": text}]},
             },
         )
+
         r.raise_for_status()
         values = r.json().get("embedding", {}).get("values")
         if not values:
             raise RuntimeError("Gemini embedding response missing values")
+        
         return values
