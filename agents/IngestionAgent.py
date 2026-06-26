@@ -172,17 +172,3 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
         has_scan_warning=has_scan_warning,
         error_message=None,
     )
-
-
-def ingest_document_job(document_id: str, storage_path: str) -> None:
-    """Synchronous entrypoint used by RQ worker processes."""
-    try:
-        asyncio.run(ingest_document(document_id, storage_path))
-    except Exception as exc:
-        asyncio.run(
-            update_document_status(
-                document_id,
-                status='error',
-                error_message=str(exc),
-            )
-        )

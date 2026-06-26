@@ -1,23 +1,25 @@
 from __future__ import annotations
 
-"""RQ queue helpers for background document ingestion."""
+"""Background ingestion scheduling (in-process, no Redis)."""
 
-import os
+import asyncio
 
-from redis import Redis
-from rq import Queue
-
-QUEUE_NAME = 'argus-ingestion'
+from agents.IngestionAgent import ingest_document
+from db.client import update_document_status
 
 
-def get_queue() -> Queue:
-    """Return the shared ingestion queue bound to REDIS_URL."""
-    redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
-    return Queue(QUEUE_NAME, connection=Redis.from_url(redis_url))
+async def _run_ingestion(document_id: str, storage_path: str) -> None:
+    try:
+        await ingest_document(document_id, storage_path)
+    except Exception as exc:
+        await update_document_status(
+            document_id,
+            status='error',
+            error_message=str(exc),
+        )
 
 
-def enqueue_ingestion(document_id: str, storage_path: str) -> str:
-    """Enqueue one ingestion job and return its RQ job id."""
-    from agents.IngestionAgent import ingest_document_job
-    job = get_queue().enqueue(ingest_document_job, document_id, storage_path)
-    return job.id
+def schedule_ingestion(document_id: str, storage_path: str) -> str:
+    """Start PDF ingestion in the background and return a local task id."""
+    asyncio.create_task(_run_ingestion(document_id, storage_path))
+    return f'ingest-{document_id}'

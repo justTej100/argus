@@ -78,8 +78,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     def upload_pdf(document_id: str, filename: str, data: bytes) -> str:
         return f'documents/{document_id}/{filename}'
 
-    def enqueue_ingestion(document_id: str, storage_path: str) -> str:
-        return f'job-{document_id}'
+    def schedule_ingestion(document_id: str, storage_path: str) -> str:
+        return f'ingest-{document_id}'
 
     monkeypatch.setattr(main, 'create_document', create_document)
     monkeypatch.setattr(main, 'update_document_status', update_document_status)
@@ -87,7 +87,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, 'list_documents', list_documents)
     monkeypatch.setattr(main, 'delete_document', delete_document)
     monkeypatch.setattr(main, 'upload_pdf', upload_pdf)
-    monkeypatch.setattr(main, 'enqueue_ingestion', enqueue_ingestion)
+    monkeypatch.setattr(main, 'schedule_ingestion', schedule_ingestion)
 
     monkeypatch.setattr(main, 'download_pdf', lambda _path: b'%PDF-1.4\n%test')
     monkeypatch.setattr(main, 'delete_pdf', lambda _path: None)
@@ -117,7 +117,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     async def fake_run(**_kwargs):
         return make_dummy_result()
 
+    async def noop_init_schema() -> None:
+        return None
+
     monkeypatch.setattr(main.pipeline, 'run', fake_run)
+    monkeypatch.setattr(main, 'init_schema', noop_init_schema)
 
     app_client = TestClient(main.app)
     app_client.state_store = state  # type: ignore[attr-defined]

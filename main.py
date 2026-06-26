@@ -11,6 +11,7 @@ import re
 import time
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
@@ -27,14 +28,22 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from agents.Pipeline import ResearchPipeline
 from auth import clear_session_cookie, require_session, session_is_valid, set_session_cookie, verify_admin_email
-from db.client import create_document, delete_document, get_document, list_documents, update_document_status
-from jobs import enqueue_ingestion
+from db.client import create_document, delete_document, get_document, init_schema, list_documents, update_document_status
+from jobs import schedule_ingestion
 from storage import delete_pdf, download_pdf, upload_pdf
 from ui.theme import apply_ice_theme, ice_shell, render_ice_markdown
 
 load_dotenv(Path(__file__).parent / '.env')
 
-app = FastAPI(title='Argus Study Buddy', version='2.0.0')
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Initialize persistence on startup."""
+    await init_schema()
+    yield
+
+
+app = FastAPI(title='Argus Study Buddy', version='2.0.0', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -77,6 +86,10 @@ class ChatRequest(BaseModel):
     provider: Literal['deepseek', 'gemini'] = 'deepseek'
     mode: Literal['chat', 'quiz', 'flashcards', 'summary'] = 'chat'
     scope: Scope = Scope()
+
+
+class BulkDeleteRequest(BaseModel):
+    document_ids: list[str]
 
 
 class EvalResponse(BaseModel):
@@ -188,7 +201,7 @@ async def upload_document(
     )
     storage_path = upload_pdf(document_id, filename or f'{document_id}.pdf', payload)
     await update_document_status(document_id, status='processing', storage_path=storage_path)
-    job_id = enqueue_ingestion(document_id, storage_path)
+    job_id = schedule_ingestion(document_id, storage_path)
     return {'id': document_id, 'status': 'processing', 'job_id': job_id}
 
 
@@ -215,6 +228,20 @@ async def remove_document(document_id: str) -> dict:
         delete_pdf(document.get('storage_path') or '')
     await delete_document(document_id)
     return {'ok': True}
+
+
+@app.post('/documents/bulk-delete', tags=['Documents'], dependencies=[Depends(require_session)])
+async def bulk_remove_documents(body: BulkDeleteRequest) -> dict:
+    """Delete multiple documents, their PDFs, and all dependent chunks."""
+    deleted: list[str] = []
+    for document_id in body.document_ids:
+        document = await get_document(document_id)
+        if not document:
+            continue
+        delete_pdf(document.get('storage_path') or '')
+        await delete_document(document_id)
+        deleted.append(document_id)
+    return {'deleted': len(deleted), 'ids': deleted}
 
 
 @app.get('/documents/{document_id}/file', dependencies=[Depends(require_session)], tags=['Documents'])
@@ -275,25 +302,97 @@ async def library_page(request: Request) -> None:
         ui.label('Deposit textbook PDFs into the glacial core.').classes('ice-subheading mb-6')
 
         docs_table = ui.column().classes('w-full gap-2')
+        selection: dict = {'ids': set(), 'docs_by_id': {}}
+
+        delete_selected_btn = ui.button('Delete selected (0)').props('flat color=negative')
+        delete_selected_btn.disable()
+
+        with ui.dialog() as confirm_dialog, ui.card().classes('ice-card p-6 gap-4 w-full max-w-lg'):
+            ui.label('Delete selected textbooks?').classes('text-xl font-semibold')
+            confirm_summary = ui.label('').classes('ice-muted')
+            confirm_list = ui.column().classes('gap-1 max-h-48 overflow-y-auto')
+            ui.label('This removes PDFs and all embeddings. Cannot be undone.').classes('text-sm text-red-300')
+            pending_delete: dict = {'ids': []}
+
+            async def confirm_bulk_delete() -> None:
+                ids = pending_delete['ids']
+                if not ids:
+                    return
+                await bulk_remove_documents(BulkDeleteRequest(document_ids=ids))
+                selection['ids'].clear()
+                confirm_dialog.close()
+                await refresh_documents(filter_input.value or None)
+
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                ui.button('Cancel', on_click=confirm_dialog.close).props('flat')
+                ui.button('Delete', on_click=confirm_bulk_delete).props('color=negative')
+
+        def update_delete_button() -> None:
+            count = len(selection['ids'])
+            delete_selected_btn.text = f'Delete selected ({count})'
+            delete_selected_btn.enable() if count else delete_selected_btn.disable()
+
+        def toggle_selection(document_id: str, selected: bool) -> None:
+            if selected:
+                selection['ids'].add(document_id)
+            else:
+                selection['ids'].discard(document_id)
+            update_delete_button()
 
         async def refresh_documents(course_filter: str | None = None) -> None:
             docs_table.clear()
             docs = await list_documents(course_filter or None)
+            selection['docs_by_id'] = {doc['id']: doc for doc in docs}
+            selection['ids'] &= set(selection['docs_by_id'])
+            update_delete_button()
             with docs_table:
                 if not docs:
                     ui.label('No documents uploaded yet.').classes('ice-muted')
                     return
                 for doc in docs:
                     with ui.row().classes('w-full items-center justify-between ice-row p-3'):
-                        with ui.column().classes('gap-0'):
-                            ui.label(doc['title']).classes('font-semibold')
-                            ui.label(f"Course: {doc.get('course') or 'none'}").classes('text-sm ice-muted')
-                            ui.label(f"Status: {doc['status']}").classes('text-xs uppercase ice-muted')
+                        with ui.row().classes('items-center gap-3'):
+                            ui.checkbox(
+                                value=doc['id'] in selection['ids'],
+                                on_change=lambda e, d=doc['id']: toggle_selection(d, e.value),
+                            )
+                            with ui.column().classes('gap-0'):
+                                ui.label(doc['title']).classes('font-semibold')
+                                ui.label(f"Course: {doc.get('course') or 'none'}").classes('text-sm ice-muted')
+                                ui.label(f"Status: {doc['status']}").classes('text-xs uppercase ice-muted')
                         ui.button('Delete', on_click=lambda d=doc['id']: delete_and_refresh(d)).props('flat color=negative')
 
         async def delete_and_refresh(document_id: str) -> None:
             await remove_document(document_id)
-            await refresh_documents(course_input.value)
+            selection['ids'].discard(document_id)
+            await refresh_documents(filter_input.value or None)
+
+        async def select_all_visible() -> None:
+            selection['ids'] = set(selection['docs_by_id'])
+            await refresh_documents(filter_input.value or None)
+
+        async def clear_selection() -> None:
+            selection['ids'].clear()
+            update_delete_button()
+            await refresh_documents(filter_input.value or None)
+
+        async def open_confirm_dialog() -> None:
+            pending_delete['ids'] = [doc_id for doc_id in selection['ids'] if doc_id in selection['docs_by_id']]
+            ids = pending_delete['ids']
+            if not ids:
+                return
+            titles = [selection['docs_by_id'][doc_id]['title'] for doc_id in ids]
+            confirm_summary.text = f'{len(titles)} textbook(s) will be permanently deleted.'
+            confirm_list.clear()
+            with confirm_list:
+                shown = titles[:10]
+                for title in shown:
+                    ui.label(f'• {title}').classes('text-sm')
+                if len(titles) > 10:
+                    ui.label(f'…and {len(titles) - 10} more').classes('text-sm ice-muted')
+            confirm_dialog.open()
+
+        delete_selected_btn.on_click(open_confirm_dialog)
 
         selected_file: dict[str, bytes | str] = {}
 
@@ -346,9 +445,12 @@ async def library_page(request: Request) -> None:
 
             ui.button('Upload and process', on_click=submit_upload).props('color=primary')
 
-        with ui.row().classes('w-full items-end gap-3 mt-6'):
+        with ui.row().classes('w-full items-center gap-3 mt-6 flex-wrap'):
             filter_input = ui.input('Filter by course').classes('w-72')
             ui.button('Refresh', on_click=lambda: refresh_documents(filter_input.value)).props('flat')
+            ui.button('Select all', on_click=select_all_visible).props('flat')
+            ui.button('Clear selection', on_click=clear_selection).props('flat')
+            delete_selected_btn
             ui.button('Go to Study View', on_click=lambda: ui.navigate.to('/chat')).props('color=secondary')
 
         await refresh_documents()

@@ -11,6 +11,7 @@ import json
 import os
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -33,6 +34,17 @@ async def get_pool() -> asyncpg.Pool | None:
 
     _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
     return _pool
+
+
+async def init_schema() -> None:
+    """Apply db/schema.sql on startup when DATABASE_URL is configured."""
+    pool = await get_pool()
+    if pool is None:
+        return
+    schema_path = Path(__file__).with_name('schema.sql')
+    sql = schema_path.read_text(encoding='utf-8')
+    async with pool.acquire() as conn:
+        await conn.execute(sql)
 
 
 async def create_document(

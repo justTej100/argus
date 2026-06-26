@@ -6,18 +6,40 @@ import os
 from pathlib import Path
 
 LOCAL_UPLOAD_DIR = Path(__file__).parent / 'uploaded_pdfs'
+DEFAULT_BUCKET = 'argus-pdfs'
+
+
+def _use_supabase() -> bool:
+    return bool(os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_KEY'))
+
+
+def _bucket_name() -> str:
+    return os.environ.get('SUPABASE_BUCKET', DEFAULT_BUCKET)
+
+
+def _get_supabase_client():
+    from supabase import create_client
+
+    return create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_KEY'])
+
+
+def _ensure_bucket(client) -> str:
+    """Create the storage bucket if it does not exist yet."""
+    bucket = _bucket_name()
+    try:
+        client.storage.get_bucket(bucket)
+    except Exception:
+        client.storage.create_bucket(bucket)
+    return bucket
 
 
 def upload_pdf(document_id: str, filename: str, data: bytes) -> str:
     """Store a PDF and return the storage path used later for retrieval."""
-    bucket = os.environ.get('SUPABASE_BUCKET')
-    url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_KEY')
     safe_name = Path(filename).name or f'{document_id}.pdf'
     storage_path = f'documents/{document_id}/{safe_name}'
-    if bucket and url and key:
-        from supabase import create_client
-        client = create_client(url, key)
+    if _use_supabase():
+        client = _get_supabase_client()
+        bucket = _ensure_bucket(client)
         client.storage.from_(bucket).upload(
             storage_path,
             data,
@@ -35,13 +57,10 @@ def download_pdf(storage_path: str) -> bytes:
     path = Path(storage_path)
     if path.exists():
         return path.read_bytes()
-    bucket = os.environ.get('SUPABASE_BUCKET')
-    url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_KEY')
-    if not (bucket and url and key):
+    if not _use_supabase():
         raise FileNotFoundError(storage_path)
-    from supabase import create_client
-    client = create_client(url, key)
+    client = _get_supabase_client()
+    bucket = _bucket_name()
     return client.storage.from_(bucket).download(storage_path)
 
 
@@ -53,14 +72,8 @@ def delete_pdf(storage_path: str) -> None:
     if path.exists():
         path.unlink(missing_ok=True)
         return
-
-    bucket = os.environ.get('SUPABASE_BUCKET')
-    url = os.environ.get('SUPABASE_URL')
-    key = os.environ.get('SUPABASE_KEY')
-    if not (bucket and url and key):
+    if not _use_supabase():
         return
-
-    from supabase import create_client
-
-    client = create_client(url, key)
+    client = _get_supabase_client()
+    bucket = _bucket_name()
     client.storage.from_(bucket).remove([storage_path])

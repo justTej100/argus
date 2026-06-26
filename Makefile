@@ -1,4 +1,4 @@
-.PHONY: help run app backend worker install venv stop test
+.PHONY: help run app backend install venv stop test
 
 APP_PORT := 8000
 APP_URL := http://localhost:$(APP_PORT)
@@ -6,7 +6,6 @@ APP_URL := http://localhost:$(APP_PORT)
 VENV := .venv
 PIP := $(VENV)/bin/pip
 UVICORN := $(VENV)/bin/uvicorn
-RQ := $(VENV)/bin/rq
 PYTEST := $(VENV)/bin/pytest
 
 help:
@@ -14,8 +13,7 @@ help:
 	@echo "make install  - install dependencies"
 	@echo "make app      - run FastAPI + NiceGUI app"
 	@echo "make backend  - alias for make app"
-	@echo "make worker   - run RQ ingestion worker"
-	@echo "make run      - run app and worker"
+	@echo "make run      - alias for make app"
 	@echo "make test     - run pytest"
 	@echo "make stop     - stop services on ports used by app"
 
@@ -33,11 +31,7 @@ app: venv
 
 backend: app
 
-worker: venv
-	@REDIS_URL=$${REDIS_URL:-redis://localhost:6379/0} $(RQ) worker argus-ingestion
-
-run: venv
-	@$(MAKE) -j2 app worker
+run: app
 
 test: venv
 	@$(PYTEST) tests/ -v
