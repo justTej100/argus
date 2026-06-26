@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Grounding and citation verification for generated answers."""
+
 import json
 import re
 from dataclasses import dataclass
@@ -22,6 +24,7 @@ class EvalResult:
 
 
 class EvalAgent:
+    """Check whether the generated answer is grounded and cited correctly."""
     EVAL_SYSTEM = (
         'You are a strict grounding evaluator. Return JSON only with keys '
         'claims (array), grounding_score (0-1), explanation (string). '
@@ -31,6 +34,7 @@ class EvalAgent:
     CITATION_RE = re.compile(r'\[p(\d+):s(\d+)\]')
 
     async def _verify_citations(self, answer_text: str, analysis: AnalysisResult) -> list[str]:
+        """Verify every citation tag against the stored sentence table."""
         errors: list[str] = []
         matches = list(self.CITATION_RE.finditer(answer_text))
         if not matches:
@@ -78,6 +82,7 @@ class EvalAgent:
         analysis: AnalysisResult,
         ai_client: AIClient,
     ) -> EvalResult:
+        """Run grounding evaluation and citation verification."""
         source_summary = '\n'.join(
             (
                 f"[doc:{chunk['document_id']}] [p{chunk['page_number']}:s{chunk['sentence_start_idx']}] "

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""PDF storage helpers for Supabase and local development fallback."""
+
 import os
 from pathlib import Path
 
@@ -7,6 +9,7 @@ LOCAL_UPLOAD_DIR = Path(__file__).parent / 'uploaded_pdfs'
 
 
 def upload_pdf(document_id: str, filename: str, data: bytes) -> str:
+    """Store a PDF and return the storage path used later for retrieval."""
     bucket = os.environ.get('SUPABASE_BUCKET')
     url = os.environ.get('SUPABASE_URL')
     key = os.environ.get('SUPABASE_KEY')
@@ -28,6 +31,7 @@ def upload_pdf(document_id: str, filename: str, data: bytes) -> str:
 
 
 def download_pdf(storage_path: str) -> bytes:
+    """Load a stored PDF from local disk or Supabase Storage."""
     path = Path(storage_path)
     if path.exists():
         return path.read_bytes()
@@ -42,6 +46,7 @@ def download_pdf(storage_path: str) -> bytes:
 
 
 def delete_pdf(storage_path: str) -> None:
+    """Delete a stored PDF from local disk or Supabase Storage."""
     if not storage_path:
         return
     path = Path(storage_path)

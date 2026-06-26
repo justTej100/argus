@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""PDF ingestion job used by the background RQ worker."""
+
 import asyncio
 
 import fitz
@@ -11,6 +13,7 @@ from storage import download_pdf
 
 
 def _segment_sentences(text: str) -> list[str]:
+    """Split page text into sentence strings with a blank spaCy pipeline."""
     nlp = spacy.blank('en')
     nlp.add_pipe('sentencizer')
     doc = nlp(text)
@@ -18,6 +21,7 @@ def _segment_sentences(text: str) -> list[str]:
 
 
 def _build_chunks(page_number: int, sentences: list[str], window_size: int = 4, overlap: int = 1) -> list[dict]:
+    """Build overlapping sentence windows for retrieval and embedding."""
     chunks: list[dict] = []
     if not sentences:
         return chunks
@@ -43,6 +47,7 @@ def _build_chunks(page_number: int, sentences: list[str], window_size: int = 4, 
 
 
 async def ingest_document(document_id: str, storage_path: str) -> None:
+    """Run the full PDF ingestion pipeline for one uploaded document."""
     await update_document_status(document_id, status='processing', error_message=None)
 
     pdf_data = download_pdf(storage_path)
@@ -97,6 +102,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
 
 
 def ingest_document_job(document_id: str, storage_path: str) -> None:
+    """Synchronous entrypoint used by RQ worker processes."""
     try:
         asyncio.run(ingest_document(document_id, storage_path))
     except Exception as exc:

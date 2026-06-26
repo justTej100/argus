@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Pytest fixtures for smoke-testing the study buddy app.
+
+The client fixture imports the FastAPI app with NiceGUI disabled, then
+monkeypatches storage and database helpers so the tests can focus on request
+handling and route behavior without external services.
+"""
+
 import os
 import sys
 from pathlib import Path

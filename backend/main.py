@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""FastAPI app and NiceGUI pages for the Argus study buddy.
+
+This file is the single-process entrypoint. It defines the HTTP API, the
+session login flow, document routes, and the browser UI pages that NiceGUI
+mounts onto the same FastAPI instance.
+"""
+
 import json
 import re
 import time
@@ -85,6 +92,7 @@ class StudyResponse(BaseModel):
 
 
 def _ensure_ui_session(request: Request) -> bool:
+    """Redirect unauthenticated browser requests to /login."""
     if session_is_valid(request):
         return True
     ui.navigate.to('/login')
@@ -92,22 +100,26 @@ def _ensure_ui_session(request: Request) -> bool:
 
 
 def _extract_citations(text: str) -> list[tuple[int, int]]:
+    """Extract page/sentence citation tags from generated text."""
     pattern = re.compile(r'\[p(\d+):s(\d+)\]')
     return [(int(m.group(1)), int(m.group(2))) for m in pattern.finditer(text)]
 
 
 @app.get('/health', tags=['Meta'])
 def health() -> dict:
+    """Return a tiny payload for deployment health checks."""
     return {'status': 'ok', 'timestamp': time.time()}
 
 
 @app.post('/auth/login', tags=['Auth'])
 def login(body: LoginRequest, response: Response) -> dict:
+    """Authenticate the shared password and set the session cookie."""
     return login_response(body.password, response)
 
 
 @app.get('/documents', tags=['Documents'])
 async def documents(course: str | None = None) -> list[dict]:
+    """List documents, optionally filtered by course."""
     return await list_documents(course=course)
 
 
@@ -118,6 +130,7 @@ async def upload_document(
     course: str | None = Form(None),
     subreddits: str | None = Form(None),
 ) -> dict:
+    """Upload a PDF, create its row, and enqueue background ingestion."""
     filename = file.filename or ''
     if file.content_type not in {'application/pdf', 'application/octet-stream'} and not filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail='Only PDF uploads are supported.')
@@ -141,6 +154,7 @@ async def upload_document(
 
 @app.get('/documents/{document_id}/status', tags=['Documents'])
 async def document_status(document_id: str) -> dict:
+    """Return ingestion status for UI polling."""
     document = await get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail='Document not found.')
@@ -155,6 +169,7 @@ async def document_status(document_id: str) -> dict:
 
 @app.delete('/documents/{document_id}', tags=['Documents'], dependencies=[Depends(require_session)])
 async def remove_document(document_id: str) -> dict:
+    """Delete a document row and its stored PDF."""
     document = await get_document(document_id)
     if document:
         delete_pdf(document.get('storage_path') or '')
@@ -164,6 +179,7 @@ async def remove_document(document_id: str) -> dict:
 
 @app.get('/documents/{document_id}/file', dependencies=[Depends(require_session)], tags=['Documents'])
 async def get_document_file(document_id: str) -> FastAPIResponse:
+    """Stream the original PDF back to the PDF viewer."""
     document = await get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail='Document not found.')
@@ -173,6 +189,7 @@ async def get_document_file(document_id: str) -> FastAPIResponse:
 
 @app.post('/chat', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
 async def chat(body: ChatRequest) -> StudyResponse:
+    """Run the full study pipeline for one user question."""
     user_messages = [m for m in body.messages if m.role == 'user']
     if not user_messages:
         raise HTTPException(status_code=400, detail='At least one user message is required.')
@@ -202,11 +219,13 @@ async def chat(body: ChatRequest) -> StudyResponse:
 
 @app.post('/search', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
 async def search(body: ChatRequest) -> StudyResponse:
+    """Compatibility alias that reuses the chat pipeline."""
     return await chat(body)
 
 
 @ui.page('/')
 async def library_page(request: Request) -> None:
+    """Render the library page with upload, status, and delete actions."""
     if not _ensure_ui_session(request):
         return
 
@@ -294,6 +313,7 @@ async def library_page(request: Request) -> None:
 
 @ui.page('/chat')
 async def chat_page(request: Request) -> None:
+    """Render the study view for chat, quiz, flashcards, and summary."""
     if not _ensure_ui_session(request):
         return
 
@@ -405,6 +425,7 @@ async def chat_page(request: Request) -> None:
 
 @ui.page('/pdf/{document_id}')
 async def pdf_page(request: Request, document_id: str) -> None:
+    """Render the PDF viewer for one uploaded document."""
     if not _ensure_ui_session(request):
         return
 
@@ -440,6 +461,7 @@ async def pdf_page(request: Request, document_id: str) -> None:
 
 @ui.page('/login')
 def login_page() -> None:
+    """Render the shared-password login screen."""
     with ui.card().classes('absolute-center w-96 max-w-[90vw] p-6 gap-4'):
         ui.label('Argus Study Buddy').classes('text-2xl font-semibold text-center')
         password = ui.input('Password', password=True, password_toggle_button=True).classes('w-full')

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Scope-aware retrieval over textbook chunks.
+
+The analysis step converts the user question into an embedding, resolves the
+active scope into document IDs, and retrieves the best chunk matches from the
+database.
+"""
+
 from dataclasses import dataclass
 
 from ai.clients import embed
@@ -15,6 +22,7 @@ class AnalysisResult:
 
 
 class AnalysisAgent:
+    """Resolve scope and retrieve the most relevant textbook chunks."""
     async def run(self, query: str, scope: dict | None = None, limit: int = 12) -> AnalysisResult:
         query_embedding = await embed(query)
         document_ids = await get_scope_document_ids(scope)

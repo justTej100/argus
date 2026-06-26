@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""End-to-end orchestration for the study buddy agent pipeline."""
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +24,7 @@ class PipelineResult:
 
 
 class ResearchPipeline:
+    """Coordinate retrieval, community context, synthesis, and eval."""
     def __init__(self) -> None:
         self.context_agent = ContextAgent()
         self.analysis_agent = AnalysisAgent()
@@ -37,6 +40,7 @@ class ResearchPipeline:
         scope: dict | None = None,
         mode: str = 'chat',
     ) -> PipelineResult:
+        """Execute the full question-answering flow for one prompt."""
         from ai.clients import get_client
 
         ai_client = get_client(provider)  # type: ignore[arg-type]

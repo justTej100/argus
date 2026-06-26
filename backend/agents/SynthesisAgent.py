@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Answer generation for chat, quiz, flashcards, and summary modes."""
+
 import json
 from dataclasses import dataclass
 
@@ -18,6 +20,7 @@ class SynthesisResult:
 
 
 class SynthesisAgent:
+    """Build prompts and normalize model output for the selected mode."""
     SYSTEM = (
         'You are a precise study assistant grounded in textbook excerpts. '
         'Every factual claim must include one or more citation tags copied verbatim from context '
@@ -26,6 +29,7 @@ class SynthesisAgent:
     )
 
     def _build_textbook_context(self, chunks: list[dict]) -> str:
+        """Format retrieved chunks with explicit page and sentence tags."""
         lines: list[str] = []
         for idx, chunk in enumerate(chunks, start=1):
             tagged = (
@@ -37,6 +41,7 @@ class SynthesisAgent:
         return '\n\n'.join(lines) if lines else 'No textbook chunks were retrieved.'
 
     def _build_community_context(self, items: list[dict]) -> str:
+        """Format supplementary Reddit snippets separately from textbook context."""
         if not items:
             return 'No community context configured for this scope.'
         snippets: list[str] = []
@@ -55,6 +60,7 @@ class SynthesisAgent:
         ai_client: AIClient,
         conversation_history: list[dict] | None = None,
     ) -> SynthesisResult:
+        """Generate the final answer or structured study artifact."""
         textbook_context = self._build_textbook_context(analysis.chunks)
         community_text = self._build_community_context(community_context)
 

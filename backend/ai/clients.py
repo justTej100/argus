@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Provider wrappers for chat completion and embeddings.
+
+DeepSeek is used for synthesis by default, while Gemini supplies embeddings.
+This module keeps the provider-specific HTTP details in one place so the rest
+of the app can stay provider-agnostic.
+"""
+
 import os
 from dataclasses import dataclass
 from typing import Literal
@@ -25,6 +32,7 @@ class AIClient:
 
 
 def get_client(provider: ModelProvider = "deepseek") -> AIClient:
+    """Return the chat-completion client for the requested provider."""
     if provider == "deepseek":
         return AIClient(
             provider="deepseek",
@@ -51,6 +59,7 @@ async def complete(
     json_mode: bool = False,
     extra_messages: list[dict] | None = None,
 ) -> str:
+    """Send a completion request and return the assistant text."""
     if not client.api_key:
         if json_mode:
             # EvalAgent parses this, so return valid JSON with neutral values.
@@ -91,6 +100,7 @@ async def complete(
 
 
 async def embed(text: str) -> list[float]:
+    """Embed text with Gemini, or a deterministic fallback in preview mode."""
     """Embed text with Gemini gemini-embedding-001."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:

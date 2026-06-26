@@ -1,22 +1,35 @@
 from __future__ import annotations
 
+"""Async Postgres helpers for documents, chunks, and sentence lookups.
+
+This module owns the connection pool plus the small set of queries used by the
+app. Keeping the SQL here avoids scattering schema assumptions across the code
+base.
+"""
+
 import json
 import os
+import time
+import uuid
 from typing import Any
 
 import asyncpg
 
 _pool: asyncpg.Pool | None = None
+_memory_documents: dict[str, dict[str, Any]] = {}
+_memory_sentences: dict[str, list[dict[str, Any]]] = {}
+_memory_chunks: dict[str, list[dict[str, Any]]] = {}
 
 
-async def get_pool() -> asyncpg.Pool:
+async def get_pool() -> asyncpg.Pool | None:
+    """Create or return the shared asyncpg pool, or None when DB is absent."""
     global _pool
     if _pool is not None:
         return _pool
 
     database_url = os.environ.get('DATABASE_URL')
     if not database_url:
-        raise RuntimeError('DATABASE_URL is required')
+        return None
 
     _pool = await asyncpg.create_pool(database_url, min_size=1, max_size=10)
     return _pool
@@ -30,7 +43,25 @@ async def create_document(
     storage_path: str,
     subreddits: list[str] | None,
 ) -> str:
+    """Insert one document row and return its UUID as text."""
     pool = await get_pool()
+    if pool is None:
+        document_id = str(uuid.uuid4())
+        _memory_documents[document_id] = {
+            'id': document_id,
+            'title': title,
+            'course': course,
+            'status': status,
+            'total_pages': total_pages,
+            'storage_path': storage_path,
+            'uploaded_at': time.time(),
+            'subreddits': subreddits,
+            'has_scan_warning': False,
+            'error_message': None,
+        }
+        _memory_sentences[document_id] = []
+        _memory_chunks[document_id] = []
+        return document_id
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -56,6 +87,22 @@ async def update_document_status(
     error_message: str | None = None,
     storage_path: str | None = None,
 ) -> None:
+    """Update document status and optional metadata fields."""
+    pool = await get_pool()
+    if pool is None:
+        document = _memory_documents.get(document_id)
+        if not document:
+            return
+        document['status'] = status
+        if total_pages is not None:
+            document['total_pages'] = total_pages
+        if has_scan_warning is not None:
+            document['has_scan_warning'] = has_scan_warning
+        if error_message is not None:
+            document['error_message'] = error_message
+        if storage_path is not None:
+            document['storage_path'] = storage_path
+        return
     updates: list[str] = ['status = $2']
     params: list[Any] = [document_id, status]
     idx = 3
@@ -84,7 +131,10 @@ async def update_document_status(
 
 
 async def get_document(document_id: str) -> dict | None:
+    """Fetch one document as a plain dictionary."""
     pool = await get_pool()
+    if pool is None:
+        return _memory_documents.get(document_id)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -101,7 +151,13 @@ async def get_document(document_id: str) -> dict | None:
 
 
 async def list_documents(course: str | None = None) -> list[dict]:
+    """Return documents newest-first, optionally filtered by course."""
     pool = await get_pool()
+    if pool is None:
+        documents = list(_memory_documents.values())
+        if course:
+            documents = [document for document in documents if document.get('course') == course]
+        return sorted(documents, key=lambda document: document.get('uploaded_at', 0), reverse=True)
     async with pool.acquire() as conn:
         if course:
             rows = await conn.fetch(
@@ -127,7 +183,13 @@ async def list_documents(course: str | None = None) -> list[dict]:
 
 
 async def delete_document(document_id: str) -> None:
+    """Delete one document and its dependent rows."""
     pool = await get_pool()
+    if pool is None:
+        _memory_documents.pop(document_id, None)
+        _memory_sentences.pop(document_id, None)
+        _memory_chunks.pop(document_id, None)
+        return
     async with pool.acquire() as conn:
         await conn.execute('DELETE FROM documents WHERE id = $1::uuid', document_id)
 
@@ -137,7 +199,12 @@ async def replace_document_content(
     chunks: list[dict],
     sentences: list[dict],
 ) -> None:
+    """Replace all stored sentences and chunks for a document."""
     pool = await get_pool()
+    if pool is None:
+        _memory_sentences[document_id] = list(sentences)
+        _memory_chunks[document_id] = [{**chunk, 'document_id': document_id} for chunk in chunks]
+        return
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute('DELETE FROM document_chunks WHERE document_id = $1::uuid', document_id)
@@ -181,10 +248,22 @@ async def replace_document_content(
 
 
 async def get_scope_document_ids(scope: dict | None) -> list[str]:
+    """Resolve a scope object into the document IDs it covers."""
     scope = scope or {'type': 'library'}
     scope_type = scope.get('type', 'library')
 
     pool = await get_pool()
+    if pool is None:
+        documents = [document for document in _memory_documents.values() if document.get('status') == 'ready']
+        if scope_type == 'document':
+            document_id = scope.get('document_id')
+            if document_id and document_id in _memory_documents and _memory_documents[document_id].get('status') == 'ready':
+                return [document_id]
+            return []
+        if scope_type == 'course':
+            course = scope.get('course')
+            return [document['id'] for document in documents if document.get('course') == course]
+        return [document['id'] for document in documents]
     async with pool.acquire() as conn:
         if scope_type == 'document':
             document_id = scope.get('document_id')
@@ -209,11 +288,18 @@ async def get_scope_document_ids(scope: dict | None) -> list[str]:
 
 
 async def retrieve_similar_chunks(query_embedding: list[float], document_ids: list[str], limit: int = 12) -> list[dict]:
+    """Return the most similar chunk rows for the given document scope."""
     if not document_ids:
         return []
-    embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
-
     pool = await get_pool()
+    if pool is None:
+        chunks = [chunk for document_id in document_ids for chunk in _memory_chunks.get(document_id, [])]
+        for chunk in chunks:
+            chunk['document_title'] = _memory_documents.get(chunk['document_id'], {}).get('title', '')
+            chunk['course'] = _memory_documents.get(chunk['document_id'], {}).get('course')
+            chunk['similarity'] = 0.0
+        return chunks[:limit]
+    embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -242,7 +328,13 @@ async def retrieve_similar_chunks(query_embedding: list[float], document_ids: li
 
 
 async def get_sentence(document_id: str, page_number: int, sentence_idx: int) -> str | None:
+    """Look up the exact stored sentence at a page/sentence address."""
     pool = await get_pool()
+    if pool is None:
+        for sentence in _memory_sentences.get(document_id, []):
+            if sentence.get('page_number') == page_number and sentence.get('sentence_idx') == sentence_idx:
+                return sentence.get('text')
+        return None
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -258,9 +350,20 @@ async def get_sentence(document_id: str, page_number: int, sentence_idx: int) ->
 
 
 async def get_scope_subreddits(document_ids: list[str]) -> list[str]:
+    """Collect subreddit names configured on the documents in scope."""
     if not document_ids:
         return []
     pool = await get_pool()
+    if pool is None:
+        result: set[str] = set()
+        for document_id in document_ids:
+            document = _memory_documents.get(document_id)
+            if not document:
+                continue
+            for subreddit in document.get('subreddits') or []:
+                if subreddit:
+                    result.add(subreddit)
+        return sorted(result)
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """

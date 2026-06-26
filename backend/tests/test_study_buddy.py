@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Smoke tests for the highest-value request paths."""
+
 
 def test_login_success_and_failure(client):
     bad = client.post('/auth/login', json={'password': 'wrong'})

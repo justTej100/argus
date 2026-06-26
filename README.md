@@ -14,6 +14,25 @@ Upload PDFs, ask questions, and get answers with inline textbook citations in th
 - DeepSeek as default synthesis provider (`provider` can still be set to `gemini`)
 - Optional subreddit context is separated and tagged as `source_type: community`
 
+## File Map
+
+- [backend/main.py](backend/main.py) is the app entrypoint: API routes, login, and NiceGUI pages.
+- [backend/agents/IngestionAgent.py](backend/agents/IngestionAgent.py) handles PDF parsing, sentence splitting, chunking, and embeddings.
+- [backend/agents/AnalysisAgent.py](backend/agents/AnalysisAgent.py) performs scoped vector retrieval.
+- [backend/agents/ContextAgent.py](backend/agents/ContextAgent.py) fetches optional subreddit context.
+- [backend/agents/SynthesisAgent.py](backend/agents/SynthesisAgent.py) builds the final response for each mode.
+- [backend/agents/EvalAgent.py](backend/agents/EvalAgent.py) checks grounding and citation integrity.
+- [backend/db/client.py](backend/db/client.py) owns the database pool and SQL helpers.
+- [backend/storage.py](backend/storage.py) stores PDFs in Supabase or a local fallback.
+- [backend/jobs.py](backend/jobs.py) enqueues ingestion jobs in RQ.
+- [backend/auth.py](backend/auth.py) manages the session cookie.
+
+## Implementation Notes
+
+- Citation tags use the exact format `[pX:sY]` and are verified against the stored sentence table.
+- Community context is never treated as textbook evidence.
+- The app is designed for one person, so the auth and UI are intentionally simple.
+
 ## Agent Pipeline
 
 1. IngestionAgent
@@ -45,7 +64,7 @@ Use exactly these variables:
 - `GEMINI_API_KEY`
 - `DEEPSEEK_API_KEY`
 
-Also required for DB access:
+Optional for persistence and retrieval across restarts:
 
 - `DATABASE_URL`
 
@@ -63,7 +82,7 @@ cp .env.example .env
 make install
 ```
 
-3. Apply DB schema
+3. Apply DB schema if you want persistent storage
 
 ```bash
 psql "$DATABASE_URL" -f backend/db/schema.sql

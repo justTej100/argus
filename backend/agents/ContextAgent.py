@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""Optional subreddit context for scope-aware supplementary sources."""
+
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 
@@ -14,6 +16,7 @@ class ContextResult:
 
 
 class ContextAgent:
+    """Fetch Reddit snippets only when a scope has subreddit settings."""
     async def _fetch_subreddit(self, client: httpx.AsyncClient, subreddit: str, query: str, limit: int) -> list[dict]:
         url = (
             f'https://www.reddit.com/r/{subreddit}/search.json'
