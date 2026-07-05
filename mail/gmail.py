@@ -8,7 +8,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import escape
 
-from ui.citations import PAGE_CITATION_PATTERN, LEGACY_CITATION_PATTERN, pdf_href, resolve_document_id
+from citations import LEGACY_CITATION_PATTERN, PAGE_CITATION_PATTERN, pdf_href, resolve_document_id
 
 _PAGE_TAG = PAGE_CITATION_PATTERN
 

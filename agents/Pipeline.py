@@ -5,10 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ai.langchain_chain import run_study_chain
 from ai.langchain_rag import chunk_metadata
-from agents.AnalysisAgent import AnalysisAgent
 from agents.EvalAgent import EvalAgent, EvalResult
-from agents.SynthesisAgent import SynthesisAgent
 
 
 @dataclass
@@ -23,10 +22,9 @@ class PipelineResult:
 
 
 class ResearchPipeline:
-    """Coordinate retrieval, synthesis, and eval."""
+    """Coordinate LangChain RAG retrieval, synthesis, and eval."""
+
     def __init__(self) -> None:
-        self.analysis_agent = AnalysisAgent()
-        self.synthesis_agent = SynthesisAgent()
         self.eval_agent = EvalAgent()
 
     async def run(
@@ -37,28 +35,17 @@ class ResearchPipeline:
         scope: dict | None = None,
         mode: str = 'chat',
     ) -> PipelineResult:
-        """Execute the full question-answering flow for one prompt."""
-        from ai.clients import get_client
-
-        ai_client = get_client()
-
-        analysis = await self.analysis_agent.run(query=query, scope=scope)
-        if not analysis.document_ids:
-            raise ValueError(
-                'No ready textbooks in this scope. Upload a PDF on the Library page and wait until status is Ready.'
-            )
-        if not analysis.chunks:
-            raise ValueError(
-                'No matching passages found for this question. Try rephrasing or widening the scope.'
-            )
-
-        synthesis = await self.synthesis_agent.run(
-            analysis=analysis,
+        chain_result = await run_study_chain(
+            query=query,
+            scope=scope,
             mode=mode,
-            ai_client=ai_client,
             conversation_history=conversation_history,
         )
-        eval_result = await self.eval_agent.run(synthesis=synthesis, analysis=analysis)
+
+        eval_result = await self.eval_agent.run_on_chunks(
+            brief=chain_result.brief,
+            chunks=chain_result.chunks,
+        )
 
         textbook_sources = [
             {
@@ -67,28 +54,28 @@ class ResearchPipeline:
                 'document_title': chunk['document_title'],
                 'course': chunk.get('course'),
                 'page_number': chunk['page_number'],
-                'sentence_start_idx': chunk['sentence_start_idx'],
-                'sentence_end_idx': chunk['sentence_end_idx'],
+                'sentence_start_idx': 0,
+                'sentence_end_idx': 0,
                 'text': chunk['text'],
-                'similarity': float(chunk['similarity']),
+                'similarity': float(chunk.get('similarity', 0)),
                 'metadata': chunk_metadata(chunk),
             }
-            for chunk in analysis.chunks
+            for chunk in chain_result.chunks
         ]
 
         return PipelineResult(
             query=query,
             query_type=query_type,
-            brief=synthesis.brief,
+            brief=chain_result.brief,
             eval=eval_result,
             sources=textbook_sources,
-            structured=synthesis.structured,
+            structured=chain_result.structured,
             meta={
-                'provider': ai_client.provider,
-                'model': ai_client.model,
+                'provider': chain_result.provider,
+                'model': chain_result.model_used,
                 'scope': scope or {'type': 'library'},
                 'mode': mode,
-                'documents_in_scope': len(analysis.document_ids),
-                'chunks_in_context': len(analysis.chunks),
+                'documents_in_scope': len({c['document_id'] for c in chain_result.chunks}),
+                'chunks_in_context': len(chain_result.chunks),
             },
         )

@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-"""Async Postgres helpers for documents, chunks, and sentence lookups.
+"""Async Postgres helpers for document metadata."""
 
-This module owns the connection pool plus the small set of queries used by the
-app. Keeping the SQL here avoids scattering schema assumptions across the code
-base.
-"""
-
-import json
 import os
 import time
 import uuid
@@ -18,8 +12,6 @@ import asyncpg
 
 _pool: asyncpg.Pool | None = None
 _memory_documents: dict[str, dict[str, Any]] = {}
-_memory_sentences: dict[str, list[dict[str, Any]]] = {}
-_memory_chunks: dict[str, list[dict[str, Any]]] = {}
 
 
 async def get_pool() -> asyncpg.Pool | None:
@@ -69,8 +61,6 @@ async def create_document(
             'has_scan_warning': False,
             'error_message': None,
         }
-        _memory_sentences[document_id] = []
-        _memory_chunks[document_id] = []
         return document_id
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -192,68 +182,16 @@ async def list_documents(course: str | None = None) -> list[dict]:
 
 
 async def delete_document(document_id: str) -> None:
-    """Delete one document and its dependent rows."""
+    """Delete one document and its vectors."""
+    from ai.langchain_store import delete_document_vectors
+
+    await delete_document_vectors(document_id)
     pool = await get_pool()
     if pool is None:
         _memory_documents.pop(document_id, None)
-        _memory_sentences.pop(document_id, None)
-        _memory_chunks.pop(document_id, None)
         return
     async with pool.acquire() as conn:
         await conn.execute('DELETE FROM documents WHERE id = $1::uuid', document_id)
-
-
-async def replace_document_content(
-    document_id: str,
-    chunks: list[dict],
-    sentences: list[dict],
-) -> None:
-    """Replace all stored sentences and chunks for a document."""
-    pool = await get_pool()
-    if pool is None:
-        _memory_sentences[document_id] = list(sentences)
-        _memory_chunks[document_id] = [{**chunk, 'document_id': document_id} for chunk in chunks]
-        return
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute('DELETE FROM document_chunks WHERE document_id = $1::uuid', document_id)
-            await conn.execute('DELETE FROM document_sentences WHERE document_id = $1::uuid', document_id)
-
-            for sentence in sentences:
-                await conn.execute(
-                    """
-                    INSERT INTO document_sentences (document_id, page_number, sentence_idx, text)
-                    VALUES ($1::uuid, $2, $3, $4)
-                    """,
-                    document_id,
-                    sentence['page_number'],
-                    sentence['sentence_idx'],
-                    sentence['text'],
-                )
-
-            for chunk in chunks:
-                embedding_str = '[' + ','.join(str(x) for x in chunk['embedding']) + ']'
-                await conn.execute(
-                    """
-                    INSERT INTO document_chunks (
-                        document_id,
-                        page_number,
-                        sentence_start_idx,
-                        sentence_end_idx,
-                        text,
-                        embedding,
-                        bbox
-                    )
-                    VALUES ($1::uuid, $2, $3, $4, $5, $6::vector, $7::jsonb)
-                    """,
-                    document_id,
-                    chunk['page_number'],
-                    chunk['sentence_start_idx'],
-                    chunk['sentence_end_idx'],
-                    chunk['text'],
-                    embedding_str,
-                    json.dumps(chunk.get('bbox')) if chunk.get('bbox') is not None else None,
-                )
 
 
 async def get_scope_document_ids(scope: dict | None) -> list[str]:
@@ -294,65 +232,3 @@ async def get_scope_document_ids(scope: dict | None) -> list[str]:
 
         rows = await conn.fetch('SELECT id::text FROM documents WHERE status = $1 ORDER BY uploaded_at DESC', 'ready')
         return [r['id'] for r in rows]
-
-
-async def retrieve_similar_chunks(query_embedding: list[float], document_ids: list[str], limit: int = 12) -> list[dict]:
-    """Return the most similar chunk rows for the given document scope."""
-    if not document_ids:
-        return []
-    pool = await get_pool()
-    if pool is None:
-        chunks = [chunk for document_id in document_ids for chunk in _memory_chunks.get(document_id, [])]
-        for chunk in chunks:
-            chunk['document_title'] = _memory_documents.get(chunk['document_id'], {}).get('title', '')
-            chunk['course'] = _memory_documents.get(chunk['document_id'], {}).get('course')
-            chunk['similarity'] = 0.0
-        return chunks[:limit]
-    embedding_str = '[' + ','.join(str(x) for x in query_embedding) + ']'
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                c.id,
-                c.document_id::text AS document_id,
-                d.title AS document_title,
-                d.course,
-                c.page_number,
-                c.sentence_start_idx,
-                c.sentence_end_idx,
-                c.text,
-                c.bbox,
-                1 - (c.embedding::halfvec(3072) <=> $1::halfvec(3072)) AS similarity
-            FROM document_chunks c
-            JOIN documents d ON d.id = c.document_id
-            WHERE c.document_id = ANY($2::uuid[])
-            ORDER BY c.embedding::halfvec(3072) <=> $1::halfvec(3072)
-            LIMIT $3
-            """,
-            embedding_str,
-            document_ids,
-            limit,
-        )
-    return [dict(r) for r in rows]
-
-
-async def get_sentence(document_id: str, page_number: int, sentence_idx: int) -> str | None:
-    """Look up the exact stored sentence at a page/sentence address."""
-    pool = await get_pool()
-    if pool is None:
-        for sentence in _memory_sentences.get(document_id, []):
-            if sentence.get('page_number') == page_number and sentence.get('sentence_idx') == sentence_idx:
-                return sentence.get('text')
-        return None
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT text
-            FROM document_sentences
-            WHERE document_id = $1::uuid AND page_number = $2 AND sentence_idx = $3
-            """,
-            document_id,
-            page_number,
-            sentence_idx,
-        )
-    return row['text'] if row else None

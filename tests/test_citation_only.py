@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ui.citations import is_citation_only, strip_citation_tags
+from citations import is_citation_only, strip_citation_tags
 
 
 def test_is_citation_only_detects_page_tags_without_prose():

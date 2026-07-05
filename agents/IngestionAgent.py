@@ -1,56 +1,19 @@
 from __future__ import annotations
 
-"""PDF ingestion job used by the background worker."""
+"""PDF ingestion — extract pages, LangChain split, PGVectorStore embed."""
 
 import re
 
 import fitz
 import pymupdf4llm
-import spacy
-from ai.langchain_rag import format_documents_for_prompt, split_pages_to_chunks
-from ai.clients import embed_many
-from db.client import get_document, replace_document_content, update_document_status
+
+from ai.langchain_rag import split_pages_to_chunks
+from ai.langchain_store import add_document_chunks, delete_document_vectors
+from db.client import get_document, update_document_status
 from storage import download_pdf
 
 
-def _segment_sentences(text: str) -> list[str]:
-    """Split page text into sentence strings with a blank spaCy pipeline."""
-    if not text.strip():
-        return []
-    nlp = spacy.blank('en')
-    nlp.add_pipe('sentencizer')
-    doc = nlp(text)
-    return [sent.text.strip() for sent in doc.sents if sent.text.strip()]
-
-
-def _build_chunks(page_number: int, sentences: list[str], window_size: int = 6, overlap: int = 1) -> list[dict]:
-    """Build overlapping sentence windows for retrieval and embedding."""
-    chunks: list[dict] = []
-    if not sentences:
-        return chunks
-
-    step = max(1, window_size - overlap)
-    for start in range(0, len(sentences), step):
-        end = min(len(sentences), start + window_size)
-        text = ' '.join(sentences[start:end]).strip()
-        if not text:
-            continue
-        chunks.append(
-            {
-                'page_number': page_number,
-                'sentence_start_idx': start,
-                'sentence_end_idx': end - 1,
-                'text': text,
-                'bbox': None,
-            }
-        )
-        if end == len(sentences):
-            break
-    return chunks
-
-
 def _normalize_markdown(text: str) -> str:
-    """Collapse noisy markdown whitespace while preserving math delimiters."""
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -104,27 +67,16 @@ def build_document_chunks(
     document_id: str = '',
     title: str = '',
     course: str | None = None,
-) -> tuple[list[dict], list[dict], bool]:
-    """Turn extracted pages into sentence rows and LangChain metadata chunks."""
-    all_sentences: list[dict] = []
+) -> tuple[list[dict], bool]:
+    """Split pages into LangChain metadata chunks."""
     has_scan_warning = False
     expected_pages = {page for page, _ in page_texts}
     extracted_pages = set()
 
     for page_number, text in page_texts:
         extracted_pages.add(page_number)
-        sentences = _segment_sentences(text)
-        if not sentences:
+        if not (text or '').strip():
             has_scan_warning = True
-            continue
-        for sentence_idx, sentence in enumerate(sentences):
-            all_sentences.append(
-                {
-                    'page_number': page_number,
-                    'sentence_idx': sentence_idx,
-                    'text': sentence,
-                }
-            )
 
     all_chunks = split_pages_to_chunks(
         page_texts,
@@ -134,11 +86,10 @@ def build_document_chunks(
     )
     if not all_chunks:
         has_scan_warning = True
-
     if expected_pages and extracted_pages != expected_pages:
         has_scan_warning = True
 
-    return all_sentences, all_chunks, has_scan_warning
+    return all_chunks, has_scan_warning
 
 
 async def ingest_document(document_id: str, storage_path: str) -> None:
@@ -150,7 +101,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
 
     page_texts = extract_pages_from_pdf(document)
     if not page_texts:
-        await replace_document_content(document_id, chunks=[], sentences=[])
+        await delete_document_vectors(document_id)
         await update_document_status(
             document_id,
             status='error',
@@ -164,7 +115,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
     doc_title = (document_row or {}).get('title') or ''
     doc_course = (document_row or {}).get('course')
 
-    all_sentences, all_chunks, has_scan_warning = build_document_chunks(
+    all_chunks, has_scan_warning = build_document_chunks(
         page_texts,
         document_id=document_id,
         title=doc_title,
@@ -172,7 +123,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
     )
 
     if not all_chunks:
-        await replace_document_content(document_id, chunks=[], sentences=all_sentences)
+        await delete_document_vectors(document_id)
         await update_document_status(
             document_id,
             status='error',
@@ -182,11 +133,7 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
         )
         return
 
-    embeddings = await embed_many([chunk['text'] for chunk in all_chunks])
-    for chunk, chunk_embedding in zip(all_chunks, embeddings):
-        chunk['embedding'] = chunk_embedding
-
-    await replace_document_content(document_id, chunks=all_chunks, sentences=all_sentences)
+    await add_document_chunks(document_id, all_chunks)
     await update_document_status(
         document_id,
         status='ready',

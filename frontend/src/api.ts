@@ -95,6 +95,37 @@ export function emailFlashcards(topic: string, items: unknown[], sources: Source
   });
 }
 
+export type AdminStats = {
+  document_count: number;
+  total_vectors: number;
+  documents: {
+    id: string;
+    title: string;
+    course?: string | null;
+    status: string;
+    total_pages?: number | null;
+    storage_path?: string;
+    chunk_count: number;
+  }[];
+};
+
+export type AdminConfig = {
+  supabaseTableUrl: string | null;
+  storageUrl: string | null;
+};
+
+export function getAdminConfig(): Promise<AdminConfig> {
+  return request('/admin/config');
+}
+
+export function getAdminStats(): Promise<AdminStats> {
+  return request('/admin/stats');
+}
+
+export function getAdminChunks(documentId: string, limit = 5): Promise<{ chunks: { text: string; page_number: number; metadata: Record<string, unknown> }[] }> {
+  return request(`/admin/documents/${encodeURIComponent(documentId)}/chunks?limit=${limit}`);
+}
+
 export function pdfUrl(documentId: string): string {
   return `/documents/${encodeURIComponent(documentId)}/file`;
 }

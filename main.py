@@ -24,7 +24,7 @@ from auth import clear_session_cookie, get_session_email, require_session, set_s
 from db.client import create_document, delete_document, get_document, init_schema, list_documents, update_document_status
 from jobs import schedule_ingestion
 from mail.gmail import EmailNotConfiguredError, send_flashcards_email
-from storage import delete_pdf, download_pdf, upload_pdf
+from storage import delete_pdf, download_pdf, supabase_dashboard_urls, upload_pdf
 
 load_dotenv(Path(__file__).parent / '.env')
 
@@ -34,6 +34,9 @@ FRONTEND_DIST = Path(__file__).parent / 'frontend' / 'dist'
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await init_schema()
+    from ai.langchain_store import ensure_vector_table
+
+    await ensure_vector_table()
     yield
 
 
@@ -299,6 +302,52 @@ async def search(request: Request, body: ChatRequest) -> StudyResponse:
     return await chat(request, body)
 
 
+@app.get('/admin/config', tags=['Admin'], dependencies=[Depends(require_session)])
+async def admin_config() -> dict:
+    urls = supabase_dashboard_urls()
+    return {
+        'supabaseTableUrl': urls.get('tableEditorUrl'),
+        'storageUrl': urls.get('storageUrl'),
+    }
+
+
+@app.get('/admin/stats', tags=['Admin'], dependencies=[Depends(require_session)])
+async def admin_stats() -> dict:
+    from ai.langchain_store import count_vectors, count_vectors_for_document
+
+    docs = await list_documents()
+    total_vectors = await count_vectors()
+    per_doc = []
+    for doc in docs:
+        per_doc.append(
+            {
+                'id': doc['id'],
+                'title': doc['title'],
+                'course': doc.get('course'),
+                'status': doc['status'],
+                'total_pages': doc.get('total_pages'),
+                'storage_path': doc.get('storage_path'),
+                'chunk_count': await count_vectors_for_document(doc['id']),
+            }
+        )
+    return {
+        'document_count': len(docs),
+        'total_vectors': total_vectors,
+        'documents': per_doc,
+    }
+
+
+@app.get('/admin/documents/{document_id}/chunks', tags=['Admin'], dependencies=[Depends(require_session)])
+async def admin_document_chunks(document_id: str, limit: int = 5) -> dict:
+    from ai.langchain_store import sample_vectors
+
+    document = await get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    chunks = await sample_vectors(document_id, limit=min(limit, 20))
+    return {'document_id': document_id, 'title': document['title'], 'chunks': chunks}
+
+
 def _spa_index() -> FileResponse:
     index = FRONTEND_DIST / 'index.html'
     if not index.is_file():
@@ -321,6 +370,11 @@ async def spa_login() -> FileResponse:
 
 @app.get('/study')
 async def spa_study() -> FileResponse:
+    return _spa_index()
+
+
+@app.get('/admin')
+async def spa_admin() -> FileResponse:
     return _spa_index()
 
 

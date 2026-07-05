@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ui.citations import (
+from citations import (
     citation_links,
     extract_page_citations,
     is_citation_only,

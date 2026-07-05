@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- App metadata for uploaded textbooks. Vectors live in argus_vectors (LangChain PGVectorStore).
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
@@ -13,40 +14,8 @@ CREATE TABLE IF NOT EXISTS documents (
     error_message TEXT
 );
 
-CREATE TABLE IF NOT EXISTS document_chunks (
-    id BIGSERIAL PRIMARY KEY,
-    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_number INTEGER NOT NULL,
-    sentence_start_idx INTEGER NOT NULL,
-    sentence_end_idx INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    embedding vector(3072) NOT NULL,
-    bbox JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS document_sentences (
-    id BIGSERIAL PRIMARY KEY,
-    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    page_number INTEGER NOT NULL,
-    sentence_idx INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(document_id, page_number, sentence_idx)
-);
-
 CREATE INDEX IF NOT EXISTS documents_uploaded_at_idx
     ON documents (uploaded_at DESC);
 
 CREATE INDEX IF NOT EXISTS documents_course_idx
     ON documents (course);
-
-CREATE INDEX IF NOT EXISTS chunks_document_id_idx
-    ON document_chunks (document_id);
-
-CREATE INDEX IF NOT EXISTS chunks_embedding_idx
-    ON document_chunks
-    USING hnsw ((embedding::halfvec(3072)) halfvec_cosine_ops);
-
-CREATE INDEX IF NOT EXISTS sentences_lookup_idx
-    ON document_sentences (document_id, page_number, sentence_idx);

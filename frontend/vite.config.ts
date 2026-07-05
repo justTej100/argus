@@ -13,6 +13,7 @@ export default defineConfig({
       '/flashcards': 'http://localhost:8000',
       '/logout': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
+      '/admin': 'http://localhost:8000',
     },
   },
   build: {

@@ -24,6 +24,7 @@ def test_service_key_alias_is_preferred(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv('SUPABASE_URL', 'https://example.supabase.co')
     monkeypatch.setenv('SUPABASE_KEY', 'sb_publishable_test_key')
     monkeypatch.setenv('SUPABASE_SERVICE_KEY', 'sb_secret_service_key')
+    monkeypatch.setenv('STORAGE_BACKEND', 'supabase')
 
     import storage
 

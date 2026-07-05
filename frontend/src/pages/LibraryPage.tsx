@@ -7,6 +7,7 @@ import {
   listDocuments,
   uploadDocument,
 } from '../api';
+import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 import type { Document } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
@@ -14,6 +15,8 @@ function StatusBadge({ status }: { status: string }) {
     status === 'ready' ? 'status-ready' : status === 'error' ? 'status-error' : 'status-processing';
   return <span className={`status ${cls}`}>{status}</span>;
 }
+
+type DeleteTarget = { ids: string[]; titles: string[]; label: string };
 
 export default function LibraryPage() {
   const [docs, setDocs] = useState<Document[]>([]);
@@ -25,6 +28,9 @@ export default function LibraryPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState('');
   const [course, setCourse] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -95,22 +101,58 @@ export default function LibraryPage() {
     });
   };
 
-  const handleBulkDelete = async () => {
+  const openBulkDelete = () => {
     if (!selected.size) return;
-    if (!confirm(`Delete ${selected.size} textbook(s)? This cannot be undone.`)) return;
-    await bulkDeleteDocuments([...selected]);
-    setSelected(new Set());
-    await refresh();
+    const titles = docs.filter((d) => selected.has(d.id)).map((d) => d.title);
+    setDeleteError('');
+    setDeleteTarget({
+      ids: [...selected],
+      titles,
+      label: `Delete ${titles.length} textbook(s)?`,
+    });
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this textbook?')) return;
-    await deleteDocument(id);
-    await refresh();
+  const openSingleDelete = (doc: Document) => {
+    setDeleteError('');
+    setDeleteTarget({
+      ids: [doc.id],
+      titles: [doc.title],
+      label: `Delete «${doc.title}»?`,
+    });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      if (deleteTarget.ids.length === 1) {
+        await deleteDocument(deleteTarget.ids[0]);
+      } else {
+        await bulkDeleteDocuments(deleteTarget.ids);
+      }
+      setSelected(new Set());
+      setDeleteTarget(null);
+      await refresh();
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
     <div>
+      <ConfirmDeleteModal
+        open={deleteTarget !== null}
+        title={deleteTarget?.label ?? ''}
+        items={deleteTarget?.titles ?? []}
+        busy={deleting}
+        error={deleteError}
+        onCancel={() => !deleting && setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+      />
+
       <h1 className="page-title">Library</h1>
       <p className="page-sub">Upload PDFs · embeddings build automatically</p>
 
@@ -152,7 +194,7 @@ export default function LibraryPage() {
           <button type="button" className="btn btn-ghost" onClick={() => setSelected(new Set())}>
             Clear
           </button>
-          <button type="button" className="btn btn-danger" disabled={!selected.size} onClick={handleBulkDelete}>
+          <button type="button" className="btn btn-danger" disabled={!selected.size || deleting} onClick={openBulkDelete}>
             Delete ({selected.size})
           </button>
           <Link to="/study" className="btn btn-primary">
@@ -180,7 +222,7 @@ export default function LibraryPage() {
                   Study
                 </Link>
               )}
-              <button type="button" className="btn btn-danger" onClick={() => handleDelete(doc.id)}>
+              <button type="button" className="btn btn-danger" disabled={deleting} onClick={() => openSingleDelete(doc)}>
                 Delete
               </button>
             </div>

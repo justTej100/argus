@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Pytest fixtures for smoke-testing the study buddy app.
 
-The client fixture imports the FastAPI app with NiceGUI disabled, then
+The client fixture imports the FastAPI app, then
 monkeypatches storage and database helpers so the tests can focus on request
 handling and route behavior without external services.
 """
@@ -117,8 +117,15 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     async def noop_init_schema() -> None:
         return None
 
+    async def noop_ensure_vector_table() -> None:
+        return None
+
     monkeypatch.setattr(main.pipeline, 'run', fake_run)
     monkeypatch.setattr(main, 'init_schema', noop_init_schema)
+
+    import ai.langchain_store as lc_store
+
+    monkeypatch.setattr(lc_store, 'ensure_vector_table', noop_ensure_vector_table)
 
     app_client = TestClient(main.app)
     app_client.state_store = state  # type: ignore[attr-defined]
