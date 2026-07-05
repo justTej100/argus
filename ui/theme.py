@@ -7,19 +7,22 @@ from typing import Iterator
 
 from nicegui import ui
 
-_THEME_APPLIED = False
+_THEME_CONFIGURED = False
 
-ICE_CSS = """
+ICE_HEAD_ASSETS = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-<style>
+"""
+
+ICE_CSS = """
+@layer overrides {
   :root {
     --ice-bg: #040810;
-    --ice-panel: rgba(10, 22, 38, 0.72);
+    --ice-panel: rgba(10, 22, 38, 0.92);
     --ice-border: rgba(77, 208, 225, 0.32);
     --ice-cyan: #4dd0e1;
     --ice-cyan-dim: rgba(77, 208, 225, 0.55);
@@ -35,20 +38,42 @@ ICE_CSS = """
     0% { background-position: 0 0, 0 0, 0 0, 0 0; }
     100% { background-position: 0 0, 0 0, 48px 48px, 48px 48px; }
   }
-  body, .nicegui-content {
+  html, body, body.body--dark, .q-layout, .q-page, .nicegui-content {
     background-color: var(--ice-bg) !important;
     background-image:
       radial-gradient(ellipse 80% 50% at 20% -10%, rgba(77, 208, 225, 0.12), transparent 55%),
       radial-gradient(ellipse 60% 40% at 90% 10%, rgba(100, 180, 255, 0.06), transparent 50%),
       linear-gradient(rgba(77, 208, 225, 0.04) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(77, 208, 225, 0.04) 1px, transparent 1px);
-    background-size: auto, auto, 48px 48px, 48px 48px;
+      linear-gradient(90deg, rgba(77, 208, 225, 0.04) 1px, transparent 1px) !important;
+    background-size: auto, auto, 48px 48px, 48px 48px !important;
     animation: gridDrift 120s linear infinite;
-    color: var(--ice-text);
-    font-family: 'Inter', sans-serif;
+    color: var(--ice-text) !important;
+    font-family: 'Inter', sans-serif !important;
     font-size: 15px;
     line-height: 1.55;
   }
+  .q-card, .q-dialog .q-card, .q-menu, .q-expansion-item__container {
+    background: var(--ice-panel) !important;
+    color: var(--ice-text) !important;
+    border: 1px solid var(--ice-border) !important;
+    box-shadow: 0 0 28px rgba(77, 208, 225, 0.08), inset 0 1px 0 rgba(255,255,255,0.04) !important;
+  }
+  .q-item, .q-item__label, .q-field__native, .q-field__label, .q-placeholder, label {
+    color: var(--ice-text) !important;
+  }
+  .q-field__label { color: var(--ice-muted) !important; font-size: 0.85rem !important; }
+  .q-field--outlined .q-field__control {
+    border-color: var(--ice-border) !important;
+    background: rgba(4, 10, 20, 0.75) !important;
+    border-radius: 8px !important;
+  }
+  .q-field--outlined.q-field--focused .q-field__control {
+    box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35) !important;
+  }
+  .q-btn { font-weight: 600 !important; }
+  .q-linear-progress { color: var(--ice-cyan) !important; }
+  .q-separator { background: var(--ice-border) !important; }
+  .q-checkbox__bg { border-color: var(--ice-border) !important; }
   .ice-logo {
     font-family: 'JetBrains Mono', monospace;
     font-size: 1.15rem;
@@ -191,30 +216,87 @@ ICE_CSS = """
     text-transform: uppercase;
     color: var(--ice-cyan-dim);
   }
-  .q-field__label { color: var(--ice-muted) !important; font-size: 0.85rem !important; }
-  .q-field__native, .q-item__label { color: var(--ice-text) !important; font-size: 0.95rem !important; }
-  .q-field--outlined .q-field__control {
-    border-color: var(--ice-border) !important;
-    background: rgba(4, 10, 20, 0.75) !important;
-    border-radius: 8px !important;
+  .prose, .prose p, .prose li, .prose h1, .prose h2, .prose h3, .prose strong, .ice-markdown {
+    color: var(--ice-text) !important;
   }
-  .q-field--outlined.q-field--focused .q-field__control {
-    box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35) !important;
+  .ice-markdown p { margin: 0.5rem 0; line-height: 1.6; }
+  .prose a { color: var(--ice-cyan) !important; text-decoration: underline; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+  .ice-study-layout { align-items: stretch; }
+  .ice-thread-scroll {
+    max-height: min(62vh, 640px);
+    overflow-y: auto;
+    scroll-behavior: smooth;
   }
-  .q-btn { font-weight: 600 !important; }
-  .q-linear-progress { color: var(--ice-cyan) !important; }
-  .prose, .prose p, .prose li, .prose h1, .prose h2, .prose h3 { color: var(--ice-text) !important; }
-</style>
+  .ice-pdf-panel {
+    background: rgba(6, 14, 26, 0.75) !important;
+    border: 1px solid var(--ice-border) !important;
+    border-radius: 12px !important;
+    padding: 14px;
+  }
+  .ice-pdf-viewer-slot {
+    border: 1px solid rgba(77, 208, 225, 0.2);
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(2, 8, 16, 0.9);
+  }
+  .ice-sources-panel {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    background: rgba(6, 14, 26, 0.75) !important;
+    border: 1px solid var(--ice-border) !important;
+    border-radius: 12px !important;
+    padding: 14px;
+    max-height: min(32vh, 360px);
+    overflow-y: auto;
+  }
+  .ice-source-card {
+    background: rgba(4, 12, 24, 0.85) !important;
+    border: 1px solid rgba(77, 208, 225, 0.2) !important;
+    border-radius: 10px !important;
+  }
+  .ice-composer {
+    background: rgba(8, 18, 32, 0.85) !important;
+    border: 1px solid var(--ice-border) !important;
+    border-radius: 12px !important;
+    padding: 12px 14px;
+  }
+  @media (max-width: 900px) {
+    .ice-sources-panel { max-width: 100%; min-width: 0; max-height: 280px; }
+  }
+}
 """
 
 
-def apply_ice_theme() -> None:
-    """Inject global ice theme assets once."""
-    global _THEME_APPLIED
-    if _THEME_APPLIED:
+def configure_ice_theme() -> None:
+    """Register global ice theme before ui.run_with().
+
+    NiceGUI 3 defaults to Quasar light mode (white cards). We force dark mode,
+    shared head assets, and layered CSS overrides so the theme survives reloads.
+    """
+    global _THEME_CONFIGURED
+    if _THEME_CONFIGURED:
         return
-    ui.add_head_html(ICE_CSS)
-    _THEME_APPLIED = True
+    ui.colors(
+        primary='#4dd0e1',
+        secondary='#26c6da',
+        accent='#80deea',
+        dark='#061018',
+        dark_page='#040810',
+        positive='#86efac',
+        negative='#fca5a5',
+        info='#4dd0e1',
+        warning='#fcd34d',
+    )
+    ui.add_head_html(ICE_HEAD_ASSETS, shared=True)
+    ui.add_css(ICE_CSS, shared=True)
+    _THEME_CONFIGURED = True
+
+
+def apply_ice_theme() -> None:
+    """Ensure ice theme is active for the current page."""
+    configure_ice_theme()
+    ui.dark_mode().enable()
 
 
 def ice_shell(active: str = '') -> None:

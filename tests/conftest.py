@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    os.environ['ARGUS_ENABLE_NICEGUI'] = '0'
     os.environ['SECRET_KEY'] = 'test-secret-key'
     os.environ['ADMIN_EMAIL'] = 'admin@test.com'
 
@@ -97,7 +96,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
         return SimpleNamespace(
             query='q',
             query_type='study',
-            brief='Answer [p1:s0]',
+            brief='Answer on page 1 [p1]',
             eval=SimpleNamespace(
                 passed=True,
                 score=1.0,

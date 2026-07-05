@@ -18,7 +18,12 @@ def test_build_chunks_from_markdown_sentences() -> None:
 
 
 def test_build_document_chunks_marks_scan_warning_for_empty_pages() -> None:
-    sentences, chunks, has_scan_warning = build_document_chunks([(1, 'A short page.'), (2, '')])
+    sentences, chunks, has_scan_warning = build_document_chunks(
+        [(1, 'A short page.'), (2, '')],
+        document_id='doc-1',
+        title='Sample',
+    )
     assert sentences
     assert chunks
+    assert chunks[0]['metadata']['page'] == 1
     assert has_scan_warning is True

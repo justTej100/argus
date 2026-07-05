@@ -7,8 +7,9 @@ import re
 import fitz
 import pymupdf4llm
 import spacy
+from ai.langchain_rag import format_documents_for_prompt, split_pages_to_chunks
 from ai.clients import embed_many
-from db.client import replace_document_content, update_document_status
+from db.client import get_document, replace_document_content, update_document_status
 from storage import download_pdf
 
 
@@ -97,10 +98,15 @@ def extract_pages_from_pdf(document: fitz.Document) -> list[tuple[int, str]]:
     return sorted(pages.items())
 
 
-def build_document_chunks(page_texts: list[tuple[int, str]]) -> tuple[list[dict], list[dict], bool]:
-    """Turn extracted page markdown into sentence rows and retrieval chunks."""
+def build_document_chunks(
+    page_texts: list[tuple[int, str]],
+    *,
+    document_id: str = '',
+    title: str = '',
+    course: str | None = None,
+) -> tuple[list[dict], list[dict], bool]:
+    """Turn extracted pages into sentence rows and LangChain metadata chunks."""
     all_sentences: list[dict] = []
-    all_chunks: list[dict] = []
     has_scan_warning = False
     expected_pages = {page for page, _ in page_texts}
     extracted_pages = set()
@@ -119,7 +125,15 @@ def build_document_chunks(page_texts: list[tuple[int, str]]) -> tuple[list[dict]
                     'text': sentence,
                 }
             )
-        all_chunks.extend(_build_chunks(page_number, sentences))
+
+    all_chunks = split_pages_to_chunks(
+        page_texts,
+        document_id=document_id,
+        title=title,
+        course=course,
+    )
+    if not all_chunks:
+        has_scan_warning = True
 
     if expected_pages and extracted_pages != expected_pages:
         has_scan_warning = True
@@ -146,7 +160,16 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
         )
         return
 
-    all_sentences, all_chunks, has_scan_warning = build_document_chunks(page_texts)
+    document_row = await get_document(document_id)
+    doc_title = (document_row or {}).get('title') or ''
+    doc_course = (document_row or {}).get('course')
+
+    all_sentences, all_chunks, has_scan_warning = build_document_chunks(
+        page_texts,
+        document_id=document_id,
+        title=doc_title,
+        course=doc_course,
+    )
 
     if not all_chunks:
         await replace_document_content(document_id, chunks=[], sentences=all_sentences)

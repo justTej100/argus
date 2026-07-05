@@ -8,12 +8,13 @@ import httpx
 
 """Gemini client wrappers for chat completion and embeddings."""
 
-DEFAULT_CHAT_MODEL = 'gemini-2.0-flash-lite'
+DEFAULT_CHAT_MODEL = 'gemini-2.5-flash'
 EMBED_MODEL = 'gemini-embedding-001'
 EMBED_BATCH_SIZE = 100
 EMBED_URL = (
     f'https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:batchEmbedContents'
 )
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class GeminiAPIError(RuntimeError):
@@ -60,23 +61,46 @@ def _gemini_error_message(response: httpx.Response) -> str:
         return response.text[:300] or f'HTTP {response.status_code}'
 
 
-async def _post_json(url: str, *, headers: dict, payload: dict, retries: int = 2) -> dict:
+async def _post_json(url: str, *, headers: dict, payload: dict, retries: int = 4) -> dict:
+    """POST JSON with retries on rate limits and transient Google outages (503/502)."""
     last_status: int | None = None
+    last_message = ''
     async with httpx.AsyncClient(timeout=120) as http:
         for attempt in range(retries):
             response = await http.post(url, headers=headers, json=payload)
-            if response.status_code == 429 and attempt < retries - 1:
+            last_status = response.status_code
+            if response.status_code in _RETRYABLE_STATUS and attempt < retries - 1:
                 retry_after = response.headers.get('retry-after')
-                delay = float(retry_after) if retry_after else 5.0 * (attempt + 1)
+                if retry_after:
+                    delay = float(retry_after)
+                elif response.status_code == 429:
+                    delay = 5.0 * (attempt + 1)
+                else:
+                    delay = 2.0 * (2**attempt)
                 await asyncio.sleep(delay)
                 continue
             if response.status_code >= 400:
+                last_message = _gemini_error_message(response)
+                if response.status_code == 503:
+                    last_message = (
+                        'Gemini is temporarily overloaded or down (503). '
+                        'Wait a minute and try again. '
+                        + last_message
+                    )
+                elif response.status_code == 429:
+                    last_message = (
+                        'Gemini rate limit reached (429). Wait a few minutes or check ai.dev/rate-limit. '
+                        + last_message
+                    )
                 raise GeminiAPIError(
-                    f'Gemini API error ({response.status_code}): {_gemini_error_message(response)}',
+                    f'Gemini API error ({response.status_code}): {last_message}',
                     status_code=response.status_code,
                 )
             return response.json()
-    raise GeminiAPIError('Gemini rate limit reached. Wait a minute and try again.', status_code=last_status or 429)
+    hint = last_message or 'Try again in a minute.'
+    if last_status == 429:
+        raise GeminiAPIError(f'Gemini rate limit reached after retries. {hint}', status_code=429)
+    raise GeminiAPIError(f'Gemini unavailable after retries ({last_status}). {hint}', status_code=last_status or 503)
 
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:

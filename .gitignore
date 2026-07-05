@@ -18,6 +18,12 @@ __pycache__/
 *.pyd
 .Python
 *.egg-info/
+# ========================
+# Frontend
+# ========================
+frontend/node_modules/
+
+# Python packaging
 dist/
 build/
 .venv/

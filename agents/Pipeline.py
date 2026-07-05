@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ai.langchain_rag import chunk_metadata
 from agents.AnalysisAgent import AnalysisAgent
 from agents.EvalAgent import EvalAgent, EvalResult
 from agents.SynthesisAgent import SynthesisAgent
@@ -70,6 +71,7 @@ class ResearchPipeline:
                 'sentence_end_idx': chunk['sentence_end_idx'],
                 'text': chunk['text'],
                 'similarity': float(chunk['similarity']),
+                'metadata': chunk_metadata(chunk),
             }
             for chunk in analysis.chunks
         ]

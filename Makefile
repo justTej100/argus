@@ -1,4 +1,4 @@
-.PHONY: help run app backend install venv stop test
+.PHONY: help run app backend install venv stop test frontend frontend-dev
 
 APP_PORT := 8000
 APP_URL := http://localhost:$(APP_PORT)
@@ -8,17 +8,16 @@ PYTHON := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 UVICORN := $(VENV)/bin/uvicorn
 PYTEST := $(VENV)/bin/pytest
+NPM := npm
 
 help:
 	@echo "Argus Study Buddy"
-	@echo "make install  - create .venv (if needed) and install dependencies"
-	@echo "make app      - run FastAPI + NiceGUI app ($(APP_URL))"
-	@echo "make backend  - alias for make app"
-	@echo "make run      - alias for make app"
-	@echo "make test     - run pytest"
-	@echo "make stop     - stop services on ports used by app"
-	@echo ""
-	@echo "No need to run 'source .venv/bin/activate' — make targets use $(VENV)/bin/* directly."
+	@echo "make install       - Python venv + pip dependencies"
+	@echo "make frontend      - npm install + build React UI"
+	@echo "make frontend-dev  - Vite dev server (proxies API to :8000)"
+	@echo "make app           - build frontend + run FastAPI ($(APP_URL))"
+	@echo "make test          - run pytest"
+	@echo "make stop          - stop services on port $(APP_PORT)"
 
 $(VENV)/bin/python:
 	@echo "Creating virtualenv in $(VENV)..."
@@ -28,16 +27,21 @@ $(VENV)/bin/python:
 venv: $(VENV)/bin/python
 
 install: venv
-	@echo "Installing dependencies into $(VENV)..."
+	@echo "Installing Python dependencies..."
 	@$(PIP) install -r requirements.txt
-	@echo "Done. Run: make app"
 
-app: install
-	@echo "Starting Argus on $(APP_URL) (python: $(PYTHON))..."
+frontend:
+	@echo "Building React frontend..."
+	@cd frontend && $(NPM) install && $(NPM) run build
+
+frontend-dev:
+	@cd frontend && $(NPM) install && $(NPM) run dev
+
+app: install frontend
+	@echo "Starting Argus on $(APP_URL)..."
 	@$(UVICORN) main:app --reload --port $(APP_PORT)
 
 backend: app
-
 run: app
 
 test: venv

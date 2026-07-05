@@ -90,6 +90,21 @@ def session_is_valid(request: Request) -> bool:
     return len(parts) == 3 and parts[0] == 'argus' and bool(parts[1])
 
 
+def get_session_email(request: Request) -> str | None:
+    """Return the authenticated email from the session cookie, if any."""
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        value = _signer().unsign(token, max_age=MAX_AGE_SECONDS).decode()
+    except (BadSignature, SignatureExpired):
+        return None
+    parts = value.split(':', 2)
+    if len(parts) != 3 or parts[0] != 'argus' or not parts[1]:
+        return None
+    return parts[1]
+
+
 def require_session(request: Request) -> None:
     """Raise HTTP 401 when the request is not authenticated."""
     if not session_is_valid(request):
