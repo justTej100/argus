@@ -38,20 +38,19 @@ export async function isAuthenticated(): Promise<boolean> {
   return res.status !== 401;
 }
 
-export function listDocuments(course?: string): Promise<Document[]> {
-  const q = course ? `?course=${encodeURIComponent(course)}` : '';
-  return request<Document[]>(`/documents${q}`);
+export function listDocuments(): Promise<Document[]> {
+  return request<Document[]>('/documents');
 }
 
 export function getDocumentStatus(id: string): Promise<Document & { error_message?: string }> {
   return request(`/documents/${id}/status`);
 }
 
-export async function uploadDocument(file: File, title: string, course?: string): Promise<{ id: string }> {
+export async function uploadDocument(file: File, title: string, description?: string): Promise<{ id: string }> {
   const form = new FormData();
   form.append('file', file);
   form.append('title', title);
-  if (course) form.append('course', course);
+  if (description) form.append('description', description);
 
   const res = await fetch('/documents', {
     method: 'POST',
@@ -106,7 +105,7 @@ export type AdminStats = {
   documents: {
     id: string;
     title: string;
-    course?: string | null;
+    description?: string | null;
     status: string;
     total_pages?: number | null;
     storage_path?: string;

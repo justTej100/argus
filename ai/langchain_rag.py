@@ -3,7 +3,7 @@ from __future__ import annotations
 """LangChain document splitting and metadata formatting for RAG.
 
 Ingestion flow:
-  PDF page text → Document(page_content, metadata={page, document_id, title, course})
+  PDF page text → Document(page_content, metadata={page, document_id, title, description})
   → RecursiveCharacterTextSplitter → chunks for PGVectorStore
 
 Retrieval flow:
@@ -26,7 +26,7 @@ def split_pages_to_chunks(
     *,
     document_id: str = '',
     title: str = '',
-    course: str | None = None,
+    description: str | None = None,
 ) -> list[dict]:
     """Split PDF pages into chunks with LangChain metadata (page, source, title)."""
     chunks: list[dict] = []
@@ -42,7 +42,7 @@ def split_pages_to_chunks(
                 'document_id': document_id,
                 'title': title,
                 'source': title or document_id,
-                'course': course or '',
+                'description': description or '',
             },
         )
         for split in _TEXT_SPLITTER.split_documents([page_doc]):
@@ -74,7 +74,7 @@ def chunk_metadata(chunk: dict) -> dict:
         'document_id': chunk.get('document_id'),
         'title': chunk.get('document_title'),
         'source': chunk.get('document_title') or chunk.get('document_id'),
-        'course': chunk.get('course') or '',
+        'description': chunk.get('description') or '',
     }
 
 

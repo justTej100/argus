@@ -48,7 +48,7 @@ def test_upload_enqueues_and_status_polling(authenticated_client):
     upload = authenticated_client.post(
         '/documents',
         files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
-        data={'title': 'Linear Algebra', 'course': 'math'},
+        data={'title': 'Linear Algebra', 'description': 'Intro linear algebra'},
     )
     assert upload.status_code == 200
     payload = upload.json()
@@ -79,7 +79,7 @@ def test_bulk_delete_removes_documents(authenticated_client):
         upload = authenticated_client.post(
             '/documents',
             files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
-            data={'title': title, 'course': 'math'},
+            data={'title': title, 'description': 'math'},
         )
         assert upload.status_code == 200
 

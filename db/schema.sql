@@ -5,7 +5,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,
-    course TEXT,
+    description TEXT,
     status TEXT NOT NULL CHECK (status IN ('processing', 'ready', 'error')),
     total_pages INTEGER NOT NULL DEFAULT 0,
     storage_path TEXT NOT NULL,
@@ -18,5 +18,5 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE INDEX IF NOT EXISTS documents_uploaded_at_idx
     ON documents (uploaded_at DESC);
 
-CREATE INDEX IF NOT EXISTS documents_course_idx
-    ON documents (course);
+-- Migrate existing databases that still have course instead of description
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS description TEXT;

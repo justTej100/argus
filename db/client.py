@@ -45,7 +45,7 @@ async def init_schema() -> None:
 
 async def create_document(
     title: str,
-    course: str | None,
+    description: str | None,
     status: str,
     total_pages: int,
     storage_path: str,
@@ -57,7 +57,7 @@ async def create_document(
         _memory_documents[document_id] = {
             'id': document_id,
             'title': title,
-            'course': course,
+            'description': description,
             'status': status,
             'total_pages': total_pages,
             'storage_path': storage_path,
@@ -69,12 +69,12 @@ async def create_document(
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO documents (title, course, status, total_pages, storage_path, subreddits)
+            INSERT INTO documents (title, description, status, total_pages, storage_path, subreddits)
             VALUES ($1, $2, $3, $4, $5, NULL)
             RETURNING id::text
             """,
             title,
-            course,
+            description,
             status,
             total_pages,
             storage_path,
@@ -141,7 +141,7 @@ async def get_document(document_id: str) -> dict | None:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id::text, title, course, status, total_pages, storage_path,
+            SELECT id::text, title, description, status, total_pages, storage_path,
                    uploaded_at, has_scan_warning, error_message
             FROM documents
             WHERE id = $1::uuid
@@ -153,35 +153,21 @@ async def get_document(document_id: str) -> dict | None:
     return dict(row)
 
 
-async def list_documents(course: str | None = None) -> list[dict]:
-    """Return documents newest-first, optionally filtered by course."""
+async def list_documents() -> list[dict]:
+    """Return documents newest-first."""
     pool = await get_pool()
     if pool is None:
         documents = list(_memory_documents.values())
-        if course:
-            documents = [document for document in documents if document.get('course') == course]
         return sorted(documents, key=lambda document: document.get('uploaded_at', 0), reverse=True)
     async with pool.acquire() as conn:
-        if course:
-            rows = await conn.fetch(
-                """
-                SELECT id::text, title, course, status, total_pages, storage_path,
-                       uploaded_at, has_scan_warning, error_message
-                FROM documents
-                WHERE course = $1
-                ORDER BY uploaded_at DESC
-                """,
-                course,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT id::text, title, course, status, total_pages, storage_path,
-                       uploaded_at, has_scan_warning, error_message
-                FROM documents
-                ORDER BY uploaded_at DESC
-                """
-            )
+        rows = await conn.fetch(
+            """
+            SELECT id::text, title, description, status, total_pages, storage_path,
+                   uploaded_at, has_scan_warning, error_message
+            FROM documents
+            ORDER BY uploaded_at DESC
+            """
+        )
     return [dict(r) for r in rows]
 
 
@@ -211,9 +197,6 @@ async def get_scope_document_ids(scope: dict | None) -> list[str]:
             if document_id and document_id in _memory_documents and _memory_documents[document_id].get('status') == 'ready':
                 return [document_id]
             return []
-        if scope_type == 'course':
-            course = scope.get('course')
-            return [document['id'] for document in documents if document.get('course') == course]
         return [document['id'] for document in documents]
     async with pool.acquire() as conn:
         if scope_type == 'document':
@@ -222,17 +205,6 @@ async def get_scope_document_ids(scope: dict | None) -> list[str]:
                 return []
             row = await conn.fetchrow('SELECT id::text FROM documents WHERE id = $1::uuid AND status = $2', document_id, 'ready')
             return [row['id']] if row else []
-
-        if scope_type == 'course':
-            course = scope.get('course')
-            if not course:
-                return []
-            rows = await conn.fetch(
-                'SELECT id::text FROM documents WHERE course = $1 AND status = $2 ORDER BY uploaded_at DESC',
-                course,
-                'ready',
-            )
-            return [r['id'] for r in rows]
 
         rows = await conn.fetch('SELECT id::text FROM documents WHERE status = $1 ORDER BY uploaded_at DESC', 'ready')
         return [r['id'] for r in rows]

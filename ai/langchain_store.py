@@ -5,7 +5,7 @@ from __future__ import annotations
 Each row stores:
   - content: chunk text
   - embedding: vector(3072) from Gemini
-  - metadata columns: document_id, page, title, course
+  - metadata columns: document_id, page, title, course (stores description for compat)
 
 Without DATABASE_URL, falls back to an in-memory list (tests only).
 
@@ -106,6 +106,9 @@ def chunks_to_documents(chunks: list[dict]) -> list[Document]:
         meta = dict(chunk.get('metadata') or {})
         doc_id = str(meta.get('document_id') or chunk.get('document_id') or '')
         page = int(meta.get('page') or meta.get('page_number') or chunk.get('page_number') or 1)
+        description = str(
+            meta.get('description') or chunk.get('description') or meta.get('course') or chunk.get('course') or ''
+        )
         docs.append(
             Document(
                 page_content=chunk['text'],
@@ -113,7 +116,8 @@ def chunks_to_documents(chunks: list[dict]) -> list[Document]:
                     'document_id': doc_id,
                     'page': page,
                     'title': str(meta.get('title') or chunk.get('title') or ''),
-                    'course': str(meta.get('course') or chunk.get('course') or ''),
+                    'course': description,
+                    'description': description,
                 },
             )
         )
@@ -202,11 +206,12 @@ def documents_to_chunk_dicts(
     chunks: list[dict] = []
     for doc, score in results:
         meta = doc.metadata or {}
+        description = meta.get('description') or meta.get('course') or None
         chunks.append(
             {
                 'document_id': meta.get('document_id', ''),
                 'document_title': meta.get('title') or 'Textbook',
-                'course': meta.get('course') or None,
+                'description': description,
                 'page_number': int(meta.get('page') or 1),
                 'sentence_start_idx': 0,
                 'sentence_end_idx': 0,

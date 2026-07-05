@@ -71,7 +71,7 @@ def build_document_chunks(
     *,
     document_id: str = '',
     title: str = '',
-    course: str | None = None,
+    description: str | None = None,
 ) -> tuple[list[dict], bool]:
     """Split pages into LangChain metadata chunks."""
     has_scan_warning = False
@@ -87,7 +87,7 @@ def build_document_chunks(
         page_texts,
         document_id=document_id,
         title=title,
-        course=course,
+        description=description,
     )
     if not all_chunks:
         has_scan_warning = True
@@ -118,13 +118,13 @@ async def ingest_document(document_id: str, storage_path: str) -> None:
 
     document_row = await get_document(document_id)
     doc_title = (document_row or {}).get('title') or ''
-    doc_course = (document_row or {}).get('course')
+    doc_description = (document_row or {}).get('description')
 
     all_chunks, has_scan_warning = build_document_chunks(
         page_texts,
         document_id=document_id,
         title=doc_title,
-        course=doc_course,
+        description=doc_description,
     )
 
     if not all_chunks:

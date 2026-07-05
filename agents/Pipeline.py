@@ -56,7 +56,7 @@ class ResearchPipeline:
                 'source_type': 'textbook',
                 'document_id': chunk['document_id'],
                 'document_title': chunk['document_title'],
-                'course': chunk.get('course'),
+                'description': chunk.get('description'),
                 'page_number': chunk['page_number'],
                 'sentence_start_idx': 0,
                 'sentence_end_idx': 0,

@@ -68,9 +68,8 @@ class ChatMessage(BaseModel):
 
 
 class Scope(BaseModel):
-    type: Literal['document', 'course', 'library'] = 'library'
+    type: Literal['document', 'library'] = 'library'
     document_id: str | None = None
-    course: str | None = None
 
 
 class ChatRequest(BaseModel):
@@ -171,15 +170,15 @@ def logout() -> RedirectResponse:
 
 
 @app.get('/documents', tags=['Documents'])
-async def documents(course: str | None = None) -> list[dict]:
-    return await list_documents(course=course)
+async def documents() -> list[dict]:
+    return await list_documents()
 
 
 @app.post('/documents', tags=['Documents'], dependencies=[Depends(require_session)])
 async def upload_document(
     file: UploadFile = File(...),
     title: str = Form(...),
-    course: str | None = Form(None),
+    description: str | None = Form(None),
 ) -> dict:
     filename = file.filename or ''
     if file.content_type not in {'application/pdf', 'application/octet-stream'} and not filename.lower().endswith('.pdf'):
@@ -188,7 +187,7 @@ async def upload_document(
     payload = await file.read()
     document_id = await create_document(
         title=title,
-        course=course or None,
+        description=description or None,
         status='processing',
         total_pages=0,
         storage_path='',
@@ -323,7 +322,7 @@ async def admin_stats() -> dict:
             {
                 'id': doc['id'],
                 'title': doc['title'],
-                'course': doc.get('course'),
+                'description': doc.get('description'),
                 'status': doc['status'],
                 'total_pages': doc.get('total_pages'),
                 'storage_path': doc.get('storage_path'),

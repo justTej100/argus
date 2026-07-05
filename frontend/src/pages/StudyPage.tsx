@@ -16,11 +16,10 @@ export default function StudyPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState<StudyMode>('chat');
-  const [scopeType, setScopeType] = useState<'library' | 'course' | 'document'>(
+  const [scopeType, setScopeType] = useState<'library' | 'document'>(
     initialDoc ? 'document' : 'library',
   );
   const [docId, setDocId] = useState(initialDoc);
-  const [course, setCourse] = useState('');
   const [emailFlashcardsFlag, setEmailFlashcardsFlag] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -34,10 +33,6 @@ export default function StudyPage() {
   const threadRef = useRef<HTMLDivElement>(null);
 
   const readyDocs = useMemo(() => docs.filter((d) => d.status === 'ready'), [docs]);
-  const courses = useMemo(
-    () => [...new Set(readyDocs.map((d) => d.course).filter(Boolean))] as string[],
-    [readyDocs],
-  );
 
   useEffect(() => {
     import('../api').then(({ listDocuments }) => listDocuments().then(setDocs));
@@ -80,9 +75,7 @@ export default function StudyPage() {
     const scope =
       scopeType === 'document'
         ? { type: 'document' as const, document_id: docId }
-        : scopeType === 'course'
-          ? { type: 'course' as const, course }
-          : { type: 'library' as const };
+        : { type: 'library' as const };
 
     const payload =
       mode === 'chat' ? [...messages, userMsg] : [userMsg];
@@ -202,19 +195,8 @@ export default function StudyPage() {
       <div className="scope-row">
         <select value={scopeType} onChange={(e) => setScopeType(e.target.value as typeof scopeType)}>
           <option value="library">All textbooks</option>
-          <option value="course">One course</option>
           <option value="document">One textbook</option>
         </select>
-        {scopeType === 'course' && (
-          <select value={course} onChange={(e) => setCourse(e.target.value)}>
-            <option value="">Select course</option>
-            {courses.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        )}
         {scopeType === 'document' && (
           <select value={docId} onChange={(e) => setDocId(e.target.value)}>
             <option value="">Select textbook</option>

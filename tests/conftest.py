@@ -28,12 +28,12 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
     state: dict[str, dict] = {}
 
-    async def create_document(title: str, course: str | None, status: str, total_pages: int, storage_path: str) -> str:
+    async def create_document(title: str, description: str | None, status: str, total_pages: int, storage_path: str) -> str:
         doc_id = f'doc-{len(state) + 1}'
         state[doc_id] = {
             'id': doc_id,
             'title': title,
-            'course': course,
+            'description': description,
             'status': status,
             'total_pages': total_pages,
             'storage_path': storage_path,
@@ -64,11 +64,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     async def get_document(document_id: str):
         return state.get(document_id)
 
-    async def list_documents(course: str | None = None):
-        docs = list(state.values())
-        if course:
-            docs = [d for d in docs if d.get('course') == course]
-        return docs
+    async def list_documents():
+        return list(state.values())
 
     async def delete_document(document_id: str) -> None:
         state.pop(document_id, None)

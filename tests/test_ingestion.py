@@ -9,7 +9,7 @@ def test_split_pages_preserves_metadata() -> None:
         [(1, 'Introduction to linear algebra. Vectors and matrices.'), (2, 'Eigenvalues and eigenvectors.')],
         document_id='doc-1',
         title='Linear Algebra',
-        course='MATH 240',
+        description='MATH 240',
     )
     assert chunks
     assert chunks[0]['page_number'] == 1

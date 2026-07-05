@@ -1,7 +1,7 @@
 export type Document = {
   id: string;
   title: string;
-  course?: string | null;
+  description?: string | null;
   status: string;
   total_pages?: number | null;
   has_scan_warning?: boolean;
@@ -14,16 +14,15 @@ export type ChatMessage = {
 };
 
 export type Scope = {
-  type: 'library' | 'course' | 'document';
+  type: 'library' | 'document';
   document_id?: string | null;
-  course?: string | null;
 };
 
 export type Source = {
   source_type: string;
   document_id: string;
   document_title?: string;
-  course?: string | null;
+  description?: string | null;
   page_number: number;
   text: string;
   similarity?: number;

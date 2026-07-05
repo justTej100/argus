@@ -8,12 +8,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 type Props = {
-  documentId: string | null;
+  documentId?: string | null;
+  file?: string | File | null;
   page: number;
   onPageChange?: (page: number) => void;
 };
 
-export default function PdfViewer({ documentId, page, onPageChange }: Props) {
+export default function PdfViewer({ documentId, file, page, onPageChange }: Props) {
   const [numPages, setNumPages] = useState(0);
   const [inputPage, setInputPage] = useState(String(page));
 
@@ -21,8 +22,15 @@ export default function PdfViewer({ documentId, page, onPageChange }: Props) {
     setInputPage(String(page));
   }, [page]);
 
-  if (!documentId) {
-    return <p className="empty">Select a textbook to preview.</p>;
+  useEffect(() => {
+    setNumPages(0);
+  }, [documentId, file]);
+
+  const pdfSource = file ?? (documentId ? pdfUrl(documentId) : null);
+  const useCredentials = !file && Boolean(documentId);
+
+  if (!pdfSource) {
+    return <p className="empty">Choose a PDF to preview.</p>;
   }
 
   const goTo = (p: number) => {
@@ -62,12 +70,12 @@ export default function PdfViewer({ documentId, page, onPageChange }: Props) {
       </div>
       <div className="pdf-viewport">
         <Document
-          key={documentId}
-          file={pdfUrl(documentId)}
+          key={typeof pdfSource === 'string' ? pdfSource : documentId ?? 'local'}
+          file={pdfSource}
           onLoadSuccess={({ numPages: n }) => setNumPages(n)}
           loading={<p className="loading">Loading PDF…</p>}
           error={<p className="empty">Could not load PDF. Try logging in again.</p>}
-          options={{ withCredentials: true }}
+          options={useCredentials ? { withCredentials: true } : undefined}
         >
           <Page pageNumber={page} width={480} renderTextLayer renderAnnotationLayer />
         </Document>
