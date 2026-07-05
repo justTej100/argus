@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Gemini chat model wrapper for LangChain LCEL chains.
+
+Default model: gemini-2.5-flash (override with GEMINI_MODEL). Set json_mode=True
+for quiz / flashcard / summary structured outputs.
+"""
+
 import os
 
 from langchain_google_genai import ChatGoogleGenerativeAI

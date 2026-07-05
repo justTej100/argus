@@ -1,67 +1,149 @@
 # Argus Study Buddy
 
-Argus is a personal textbook RAG tool. Upload PDFs, ask questions, and get answers with inline citations in the form `[pX:sY]` so each claim is traceable to a page and sentence.
+Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers with **page citations** (`[p12]`). Built for one student (you) — Google sign-in, minimal black/blue UI, embedded PDF viewer.
 
-Sign in with Google, upload textbooks, and study in chat/quiz/flashcard/summary modes. Answers can include LaTeX math (`$...$`) rendered with KaTeX.
+**Stack:** FastAPI backend · React frontend · LangChain RAG · Gemini · Supabase Postgres + Storage
+
+---
+
+## What it does
+
+1. **Sign in** with Google (allowlisted email only)
+2. **Upload** PDF textbooks → background ingestion extracts text, chunks by page, embeds with Gemini
+3. **Study** in chat, quiz, flashcard, or summary mode — answers cite textbook pages
+4. **View** the PDF in-panel; citation chips jump to the right page
+5. **Inspect** the database on `/admin` (chunk counts, samples, links to Supabase dashboard)
+
+Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.page` on each chunk.
+
+---
 
 ## Repo layout
 
 ```
 argus/
-├── main.py              # FastAPI + NiceGUI entrypoint
-├── auth.py              # Google OAuth + session cookies
-├── jobs.py              # In-process background ingestion
-├── storage.py           # PDF storage (Supabase or local fallback)
-├── requirements.txt
+├── main.py                 # FastAPI app: API routes + serves React build
+├── auth.py                 # Google OAuth + signed session cookies
+├── citations.py            # [pN] parsing, validation, email link helpers
+├── storage.py              # PDF files: Supabase Storage or local disk
+├── jobs.py                 # In-process background ingestion (no Redis)
 ├── Makefile
-├── agents/              # Ingestion, retrieval, synthesis, eval pipeline
-├── ai/                  # Gemini client (embeddings + chat)
-├── db/                  # Postgres/pgvector helpers + schema.sql
-├── ui/                  # Ice/cyber NiceGUI theme + KaTeX
+├── requirements.txt
+│
+├── frontend/               # React + Vite UI (Library, Study, Admin, Login)
+│   └── src/
+│       ├── api.ts          # fetch wrappers for backend routes
+│       ├── pages/          # LibraryPage, StudyPage, AdminPage, LoginPage
+│       └── components/     # PdfViewer, ConfirmDeleteModal, …
+│
+├── agents/
+│   ├── Pipeline.py         # Orchestrates LangChain RAG + citation eval
+│   ├── IngestionAgent.py   # PDF → page text → LangChain chunks → vector store
+│   └── EvalAgent.py        # Checks answers are prose + page refs are valid
+│
+├── ai/
+│   ├── langchain_rag.py    # Page splitting + prompt formatting (metadata blocks)
+│   ├── langchain_store.py  # PGVectorStore table `argus_vectors`
+│   ├── langchain_chain.py  # LCEL retrieve → Gemini chat / JSON modes
+│   ├── langchain_embeddings.py
+│   ├── langchain_llm.py
+│   └── clients.py          # Low-level Gemini HTTP (retries, batch embed for tests)
+│
+├── db/
+│   ├── client.py           # `documents` table CRUD + scope resolution
+│   └── schema.sql          # Postgres schema (vectors managed by LangChain)
+│
+├── mail/gmail.py           # Optional flashcard email via Gmail SMTP
 └── tests/
 ```
 
+---
+
 ## Architecture
 
-- **FastAPI + NiceGUI** in one process — no separate frontend
-- **In-process background tasks** for PDF ingestion (no Redis, no worker process)
-- **pymupdf4llm** for LaTeX/math-aware PDF extraction (OCR fallback on scan pages)
-- **Gemini** for embeddings and chat (single AI provider)
-- **Supabase Postgres + pgvector** when `DATABASE_URL` is set — schema applies automatically on startup
-- **Supabase Storage** when `SUPABASE_URL` + `SUPABASE_KEY` are set — bucket is auto-created
-- **Local fallbacks** when Supabase vars are omitted: in-memory DB + `uploaded_pdfs/` on disk
+```text
+Browser (React)
+    │  session cookie
+    ▼
+FastAPI (main.py)
+    ├── /auth/google          Google OAuth
+    ├── /documents            upload, list, delete PDFs
+    ├── /chat                 LangChain RAG pipeline
+    ├── /admin/*              DB stats (read-only)
+    └── /*                    React SPA (frontend/dist)
+
+Upload flow:
+  PDF → storage.py (Supabase or local)
+      → IngestionAgent (pymupdf4llm extract)
+      → langchain_rag.split_pages_to_chunks (metadata: page, title, course)
+      → langchain_store → argus_vectors (PGVectorStore)
+
+Question flow:
+  query → langchain_store.similarity_search (scoped by textbook)
+        → langchain_chain (Gemini tutor prompt)
+        → EvalAgent (citation check)
+        → JSON response → React UI
+```
+
+**No Redis, no separate worker.** Ingestion runs as a background task in the same process.
+
+---
 
 ## Quick start
 
+**Prerequisites:** Python 3.12+, Node 18+, npm
+
 ```bash
 cp .env.example .env
-# Fill in keys (see below) — minimum: auth + GEMINI_API_KEY
-make install
-make app          # http://localhost:8000
+# Fill in at minimum: SECRET_KEY, ADMIN_EMAIL, Google OAuth, GEMINI_API_KEY
+# Recommended: DATABASE_URL + Supabase storage keys (see below)
+
+make install          # Python venv + pip
+make app              # builds React + starts http://localhost:8000
 ```
 
-Open `/login`, sign in with Google, upload a PDF, go to `/chat`.
+Open http://localhost:8000 → **Sign in with Google** → upload a PDF on **Library** → wait for status **ready** → **Study**.
 
-**You do not need Redis.** One command (`make app`) runs everything.
+### Development (hot reload UI)
+
+Terminal 1 — API:
+
+```bash
+make install
+.venv/bin/uvicorn main:app --reload --port 8000
+```
+
+Terminal 2 — Vite (proxies API to :8000):
+
+```bash
+make frontend-dev     # http://localhost:5173
+```
 
 ---
 
 ## Environment variables
 
-| Variable | Required? | What it does |
-|----------|-----------|--------------|
+Copy `.env.example` to `.env`. Full key setup is below.
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
 | `SECRET_KEY` | Yes | Signs session cookies |
 | `ADMIN_EMAIL` | Yes | Google account(s) allowed to sign in (comma-separated) |
-| `GOOGLE_CLIENT_ID` | Yes | Google OAuth |
-| `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth |
-| `GOOGLE_REDIRECT_URI` | Yes | Default: `http://localhost:8000/auth/google/callback` |
-| `GEMINI_API_KEY` | Yes | PDF embeddings and chat answers |
-| `DATABASE_URL` | Recommended | Postgres URI from Supabase **Connect** or **Settings → Database** |
-| `SUPABASE_URL` | Optional | `https://xxxx.supabase.co` from **Settings → API → Project URL** |
-| `SUPABASE_KEY` | Optional | **`service_role`** secret from **Settings → API** (not `anon`) |
-| `ENVIRONMENT` | Optional | Set to `production` for secure cookies |
+| `GOOGLE_CLIENT_ID` | Yes | Google OAuth client |
+| `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
+| `GOOGLE_REDIRECT_URI` | Yes | `http://localhost:8000/auth/google/callback` (local) |
+| `GEMINI_API_KEY` | Yes | Embeddings + chat (LangChain Google GenAI) |
+| `DATABASE_URL` | Recommended | Supabase Postgres URI — vectors + document metadata |
+| `SUPABASE_URL` | Recommended | Project URL for Storage + dashboard links |
+| `SUPABASE_SERVICE_KEY` | Recommended | **service_role** secret (PDF uploads) |
+| `STORAGE_BACKEND` | Optional | `local` (dev) or `supabase` (prod; default when `ENVIRONMENT=production`) |
+| `SUPABASE_BUCKET` | Optional | Storage bucket name (default `argus-pdfs`) |
+| `ENVIRONMENT` | Optional | `production` → secure cookies + supabase storage default |
+| `GEMINI_MODEL` | Optional | Chat model (default `gemini-2.5-flash`) |
+| `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Optional | Email flashcards to yourself |
+| `APP_BASE_URL` | Optional | Base URL in email citation links |
 
-No `REDIS_URL`. No `SUPABASE_BUCKET` (defaults to `argus-pdfs`, created automatically). No manual `psql` step.
+**Aliases:** `SUPABASE_SERVICE_ROLE_KEY` works instead of `SUPABASE_SERVICE_KEY`. Legacy `SUPABASE_KEY` only if it is a service_role secret (not publishable/anon).
 
 ---
 
@@ -69,174 +151,173 @@ No `REDIS_URL`. No `SUPABASE_BUCKET` (defaults to `argus-pdfs`, created automati
 
 ### `SECRET_KEY`
 
+Random string for cookie signing:
+
 ```bash
 openssl rand -hex 32
 ```
 
 ### `ADMIN_EMAIL`
 
-Your Google address(es), comma-separated:
+Your Google address(es):
 
-```
+```env
 ADMIN_EMAIL=you@gmail.com
 ```
 
-### Google OAuth
+Multiple accounts: `you@gmail.com,partner@gmail.com`
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → create/select a project
-2. **APIs & Services → OAuth consent screen** — configure, add yourself as a test user if in Testing mode
-3. **Credentials → Create → OAuth client ID → Web application**
-4. Authorized redirect URI: `http://localhost:8000/auth/google/callback`
+### Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`)
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → create or select a project
+2. **APIs & Services → OAuth consent screen** — configure; add yourself as a **test user** if app is in Testing mode
+3. **Credentials → Create credentials → OAuth client ID → Web application**
+4. **Authorized redirect URIs:** add exactly:
+   - Local: `http://localhost:8000/auth/google/callback`
+   - Production: `https://your-domain.com/auth/google/callback`
 5. Copy **Client ID** → `GOOGLE_CLIENT_ID`, **Client secret** → `GOOGLE_CLIENT_SECRET`
+6. Set `GOOGLE_REDIRECT_URI` to match the URI you registered
 
 ### `GEMINI_API_KEY`
 
-1. [Google AI Studio](https://aistudio.google.com/apikey) → **Create API key**
-2. Paste into `.env` — used for both ingestion embeddings and study chat.
+1. Go to [Google AI Studio → API keys](https://aistudio.google.com/apikey)
+2. **Create API key** (use an existing Google Cloud project or create one)
+3. Paste into `.env` as `GEMINI_API_KEY`
 
-### Supabase setup (database + PDF storage)
+Used for:
+- **Embeddings** — `models/gemini-embedding-001` at 3072 dimensions (LangChain)
+- **Chat** — `gemini-2.5-flash` by default (override with `GEMINI_MODEL`)
 
-Argus uses Supabase for two things only:
+Free tier has daily limits; if chat fails with 429, wait or switch models in `.env`.
 
-| `.env` variable | What it is | Where to get it |
-|-----------------|------------|-----------------|
-| `DATABASE_URL` | Postgres connection string | **Connect** button (top of project) or **Project Settings → Database** |
-| `SUPABASE_URL` | Your project’s API base URL | **Project Settings → API → Project URL** |
-| `SUPABASE_KEY` | Server secret for Storage uploads | **Project Settings → API → `service_role`** (not `anon`) |
+### Supabase (database + PDF storage)
 
-You do **not** need to create a Storage bucket, run `psql`, or enable pgvector manually — Argus applies the schema on startup and creates the `argus-pdfs` bucket on first upload.
+Create a free project at [supabase.com/dashboard](https://supabase.com/dashboard).
 
-#### Step 0 — Create a project
+#### `DATABASE_URL` (Postgres)
 
-1. Go to [supabase.com/dashboard](https://supabase.com/dashboard) and sign in.
-2. Click **New project**.
-3. Pick an organization, name, and region.
-4. Set a **database password** — copy it somewhere safe. You need it for `DATABASE_URL` and cannot recover it later (only reset).
-5. Wait until the project finishes provisioning (~1–2 minutes).
-
-#### Step 1 — `DATABASE_URL` (Postgres)
-
-**Option A — Connect button (easiest)**
-
-1. Open your project in the dashboard.
-2. Click the green **Connect** button (top center of the project home page).
-3. Open the **ORMs** or **Connection string** tab.
-4. Copy the **URI** connection string. It looks like:
+1. Open your project → click **Connect** (top) or **Project Settings → Database**
+2. Copy the **URI** connection string, e.g.:
+   ```text
+   postgresql://postgres.[ref]:[PASSWORD]@aws-0-us-east-1.pooler.supabase.com:5432/postgres
    ```
-   postgresql://postgres.[PROJECT_REF]:[YOUR-PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres
-   ```
-   or a direct form:
-   ```
-   postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres
-   ```
-5. Replace `[YOUR-PASSWORD]` with the database password from Step 0 — **do not include the square brackets**, only the password itself.
-6. If the password contains `@`, `#`, `%`, `!`, or other special characters, [URL-encode](https://www.urlencoder.org/) it before pasting (e.g. `@` → `%40`, `#` → `%23`).
-7. Paste into `.env` as `DATABASE_URL=...`
+3. Replace `[PASSWORD]` with your database password (URL-encode special chars: `@` → `%40`, `#` → `%23`)
+4. Paste as `DATABASE_URL=...`
 
-**Option B — Project Settings**
+On startup Argus runs `db/schema.sql` and creates the LangChain vector table `argus_vectors`.
 
-1. Left sidebar → **Project Settings** (gear icon at the bottom).
-2. Click **Database**.
-3. Scroll to **Connection string** / **Connection info**.
-4. Choose **URI**, copy the string, replace the password placeholder, paste into `DATABASE_URL`.
+#### `SUPABASE_URL`
 
-**Which string to use?** Any of **Session pooler**, **Direct connection**, or **Transaction pooler** works for Argus. If one fails to connect, try **Session pooler** (port `5432` on the pooler host) or **Direct connection**.
+1. **Project Settings → API**
+2. Copy **Project URL** → `https://xxxx.supabase.co`
 
-#### Step 2 — `SUPABASE_URL` (Project URL)
+#### `SUPABASE_SERVICE_KEY` (Storage uploads)
 
-1. Left sidebar → **Project Settings** (gear).
-2. Click **API** (some dashboards label this **Data API**).
-3. Under **Project URL**, copy the value. It looks like:
-   ```
-   https://abcdefghijklmnop.supabase.co
-   ```
-4. Paste into `.env`:
-   ```
-   SUPABASE_URL=https://abcdefghijklmnop.supabase.co
-   ```
+1. Same **Project Settings → API** page
+2. Under **Project API keys**, reveal the **`service_role`** / **secret** key (`eyJ...` or `sb_secret_...`)
+3. Paste as `SUPABASE_SERVICE_KEY=...`
 
-#### Step 3 — `SUPABASE_KEY` (service role secret)
+**Do not use the publishable/anon key** — it cannot upload files server-side.
 
-Stay on the same **Project Settings → API** page:
+#### `STORAGE_BACKEND`
 
-1. Find the **Project API keys** section.
-2. Copy the **`service_role`** key (labeled **secret** — click **Reveal** if hidden).
-3. Paste into `.env`:
-   ```
-   SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-   ```
+| Value | When to use |
+|-------|-------------|
+| `local` | Dev without Supabase; PDFs in `uploaded_pdfs/` |
+| `supabase` | Production (Render/Railway); PDFs in cloud bucket |
 
-**Important:** Use `service_role`, not `anon`. The `anon` key is for browsers; Argus runs on the server and needs `service_role` to upload PDFs.
+Production default: if `ENVIRONMENT=production`, storage is `supabase` unless you override.
 
-**New-style keys:** If your dashboard shows `sb_secret_...` instead of a JWT, use the **secret** key marked for server/backend use (same role as `service_role`).
-
-#### Example `.env` block
+#### Example Supabase block
 
 ```env
-DATABASE_URL=postgresql://postgres.xxxxxxxxxxxx:YOUR_DB_PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
-SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+DATABASE_URL=postgresql://postgres.xxxx:YOUR_PASSWORD@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+STORAGE_BACKEND=supabase
+SUPABASE_BUCKET=argus-pdfs
 ```
 
-#### What Argus does automatically
+### Gmail flashcards (optional)
 
-On `make app` with these set:
+1. Use a Gmail account → [Google App Passwords](https://myaccount.google.com/apppasswords) (requires 2FA)
+2. Create an app password for “Mail”
+3. Set `GMAIL_USER=you@gmail.com` and `GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`
+4. In Study mode, generate flashcards and check **Email flashcards** or use **Email last flashcards**
 
-- Runs `db/schema.sql` against `DATABASE_URL` (tables + pgvector index)
-- On first PDF upload, creates the `argus-pdfs` Storage bucket if missing
-
-#### Skip Supabase for a quick trial
-
-Leave all three blank. Argus uses in-memory data and stores PDFs in `uploaded_pdfs/` on disk. Everything is lost when you restart the app.
-
-#### Supabase troubleshooting
-
-| Problem | Fix |
-|---------|-----|
-| `does not appear to be an IPv4 or IPv6 address` | Malformed `DATABASE_URL` — usually an unencoded `@` in the password, or `[brackets]` left around the host/password from the Supabase template. URL-encode the password and remove placeholder brackets |
-| `password authentication failed` | Wrong DB password in `DATABASE_URL` — reset under **Project Settings → Database → Reset database password**, then update `.env` |
-| `connection refused` / timeout | Project may be paused (free tier) — open the dashboard to wake it; try **Session pooler** URI instead of Direct |
-| Storage upload fails | `SUPABASE_KEY` must be `service_role` / secret key, not `anon` |
-| `extension "vector" does not exist` | Rare on hosted Supabase (usually pre-enabled); contact Supabase support or enable **vector** in **Database → Extensions** |
-
-
-## Setup
-
-```bash
-cp .env.example .env
-# edit .env
-make install
-make app
-make test    # optional
-```
+---
 
 ## Make commands
 
 | Command | Description |
 |---------|-------------|
-| `make install` | Create `.venv`, install deps |
-| `make app` | Run the app on port 8000 |
-| `make run` | Same as `make app` |
+| `make install` | Create `.venv`, install Python deps |
+| `make frontend` | `npm install` + build React to `frontend/dist` |
+| `make frontend-dev` | Vite dev server on :5173 (proxy to API) |
+| `make app` | Build frontend + run FastAPI on :8000 |
 | `make test` | Run pytest |
 | `make stop` | Kill process on port 8000 |
 
-## Routes & UI
+---
 
-**API:** `/health`, `/auth/google`, `/logout`, `/documents`, `/documents/bulk-delete`, `/chat`, `/search`
+## API routes
 
-**Pages:** `/login`, `/` (library), `/chat` (study), `/pdf/{id}` (viewer)
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | No | Health check |
+| GET | `/auth/google` | No | Start OAuth |
+| GET | `/logout` | No | Clear session |
+| GET | `/documents` | No | List textbooks |
+| POST | `/documents` | Yes | Upload PDF |
+| GET | `/documents/{id}/status` | No | Ingestion status |
+| GET | `/documents/{id}/file` | Yes | PDF bytes (viewer) |
+| DELETE | `/documents/{id}` | Yes | Delete one book |
+| POST | `/documents/bulk-delete` | Yes | Delete many |
+| POST | `/chat` | Yes | Ask question (RAG) |
+| GET | `/admin/config` | Yes | Supabase dashboard URLs |
+| GET | `/admin/stats` | Yes | Document + vector counts |
+| GET | `/admin/documents/{id}/chunks` | Yes | Sample chunks |
 
-## End-to-end flow
+React pages: `/login`, `/` (library), `/study`, `/admin`
 
-1. Sign in at `/login`
-2. Upload a PDF on the library page — ingestion runs in the background inside the same process
-3. Poll until status is `ready`
-4. On the library page, check the books you want to remove, click **Delete selected**, and confirm in the dialog
-5. Ask questions in `/chat` with `[pX:sY]` citations
+---
+
+## Deploy (Render / Railway)
+
+One web service:
+
+**Build:**
+```bash
+cd frontend && npm install && npm run build
+pip install -r requirements.txt
+```
+
+**Start:**
+```bash
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+**Env:** set all production vars; `GOOGLE_REDIRECT_URI` must match your live URL; `ENVIRONMENT=production`; `STORAGE_BACKEND=supabase`; `DATABASE_URL` + `SUPABASE_SERVICE_KEY`.
+
+After deploy, **re-upload textbooks** if migrating from an older schema so vectors land in `argus_vectors`.
+
+---
 
 ## Troubleshooting
 
-- **Login fails** — `GOOGLE_REDIRECT_URI` must match Google Cloud Console exactly
-- **Upload stuck on `processing`** — check terminal for ingestion errors (usually `GEMINI_API_KEY`)
-- **Chat errors** — check `GEMINI_API_KEY`
-- **DB errors on startup** — see [Supabase troubleshooting](#supabase-troubleshooting) below; check `DATABASE_URL` password and that the project is not paused
+| Problem | Fix |
+|---------|-----|
+| Login redirect error | `GOOGLE_REDIRECT_URI` must match Google Console exactly |
+| 401 on Study/Library | Sign in again; check `SECRET_KEY` did not change mid-session |
+| Upload fails (storage) | Use `SUPABASE_SERVICE_KEY`, not publishable key; set `STORAGE_BACKEND=supabase` |
+| Stuck on `processing` | Check terminal logs; usually `GEMINI_API_KEY` or PDF extract failure |
+| Chat 429 / 503 | Gemini quota or outage; retry or change `GEMINI_MODEL` |
+| DB connection error | URL-encode password in `DATABASE_URL`; wake paused Supabase project |
+| Blank UI | Run `make frontend` before `make app`; need `frontend/dist` |
+| Old books have no answers | Re-upload after LangChain migration — chunks live in `argus_vectors` |
+
+---
+
+## License
+
+See [LICENSE](LICENSE).

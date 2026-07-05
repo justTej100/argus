@@ -1,6 +1,7 @@
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Argus Postgres schema (applied on startup via db/client.init_schema)
+-- Vector embeddings: LangChain PGVectorStore table `argus_vectors` (created separately)
 
--- App metadata for uploaded textbooks. Vectors live in argus_vectors (LangChain PGVectorStore).
+CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     title TEXT NOT NULL,

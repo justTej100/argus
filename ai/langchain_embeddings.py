@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Gemini embedding model for LangChain PGVectorStore.
+
+Uses GoogleGenerativeAIEmbeddings with output_dimensionality=3072 to match
+gemini-embedding-001. Reads GEMINI_API_KEY or GOOGLE_API_KEY from the environment.
+"""
+
 import os
 
 from langchain_google_genai import GoogleGenerativeAIEmbeddings

@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""PDF ingestion — extract pages, LangChain split, PGVectorStore embed."""
+"""PDF ingestion: extract pages → LangChain split → PGVectorStore embed.
+
+Does not write to legacy document_chunks tables. Vectors go to argus_vectors
+via ai.langchain_store.add_document_chunks(). Re-ingest replaces vectors for
+that document_id before inserting new ones.
+"""
 
 import re
 

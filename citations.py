@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""Citation parsing and link generation — page-level [pN] tags only."""
+"""Citation parsing and link generation for page-level [pN] tags.
+
+Used by the LangChain RAG chain (detect citation-only answers), EvalAgent,
+Gmail flashcard emails, and tests. Legacy [pN:sM] sentence tags are still
+parsed for backward compatibility but new answers use page-only citations.
+"""
 
 import re
 from urllib.parse import quote

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-"""LCEL RAG chain — retrieve with metadata, generate tutor answers."""
+"""LCEL RAG chain: retrieve scoped chunks → format context → Gemini → answer.
+
+Modes:
+  - chat: markdown tutor answer with [pN] references
+  - quiz / flashcards / summary: JSON structured output
+
+Falls back to excerpt-based answers when the model returns citation-only text.
+"""
 
 import json
 from dataclasses import dataclass

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-"""LangChain PGVectorStore — page-metadata vectors in Postgres."""
+"""LangChain PGVectorStore — vector storage in Postgres table `argus_vectors`.
+
+Each row stores:
+  - content: chunk text
+  - embedding: vector(3072) from Gemini
+  - metadata columns: document_id, page, title, course
+
+Without DATABASE_URL, falls back to an in-memory list (tests only).
+
+Table is created on app startup via ensure_vector_table() in main.py lifespan.
+"""
 
 import logging
 import os

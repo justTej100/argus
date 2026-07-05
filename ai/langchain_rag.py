@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-"""LangChain document splitting and metadata formatting for RAG."""
+"""LangChain document splitting and metadata formatting for RAG.
+
+Ingestion flow:
+  PDF page text → Document(page_content, metadata={page, document_id, title, course})
+  → RecursiveCharacterTextSplitter → chunks for PGVectorStore
+
+Retrieval flow:
+  Retrieved chunks → format_documents_for_prompt() → Gemini tutor prompt
+  Model cites metadata.page as [pN] in answers.
+"""
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter

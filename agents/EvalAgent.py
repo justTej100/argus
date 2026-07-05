@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Citation verification for generated answers (page-level)."""
+"""Post-generation citation verification (no extra LLM call).
+
+Checks that answers contain real prose (not just [pN] tags) and that cited
+pages appeared in the retrieved chunk set.
+"""
 
 from dataclasses import dataclass
 

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""End-to-end orchestration for the study buddy agent pipeline."""
+"""Study pipeline orchestrator.
+
+Wires langchain_chain.run_study_chain() to EvalAgent citation checks and
+formats sources for the React UI (including metadata dict per chunk).
+"""
 
 from dataclasses import dataclass
 from typing import Any

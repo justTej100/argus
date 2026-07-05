@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-"""PDF storage helpers for Supabase and local development."""
+"""PDF storage: Supabase Storage (production) or local uploaded_pdfs/ (dev).
+
+Set STORAGE_BACKEND=supabase for cloud storage (requires SUPABASE_URL +
+SUPABASE_SERVICE_KEY). Production defaults to supabase when ENVIRONMENT=production.
+
+See README "Supabase Storage" for how to obtain the service_role key.
+"""
 
 import logging
 import os

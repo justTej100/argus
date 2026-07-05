@@ -1,3 +1,8 @@
+/**
+ * HTTP client for the FastAPI backend.
+ * All requests use credentials: 'include' for session cookies.
+ * Dev: Vite proxies /auth, /documents, /chat, /admin to localhost:8000.
+ */
 import type { ChatMessage, Document, Scope, Source, StudyMode, StudyResponse } from './types';
 
 const jsonHeaders = { 'Content-Type': 'application/json' };

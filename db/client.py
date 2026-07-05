@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-"""Async Postgres helpers for document metadata."""
+"""Async Postgres helpers for the `documents` table (metadata only).
+
+Vector chunks live in `argus_vectors` (managed by ai.langchain_store).
+When DATABASE_URL is unset, uses an in-memory dict for tests.
+"""
 
 import os
 import time
