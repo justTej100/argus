@@ -234,8 +234,8 @@ export default function LibraryPage() {
         {uploadMsg && <p className={uploadMsg.includes('Ready') ? 'doc-meta upload-msg' : 'login-error upload-msg'}>{uploadMsg}</p>}
         <div className="upload-preview">
           <PdfViewer
-            file={previewBlobUrl ?? previewFile}
-            documentId={previewDocId}
+            file={previewBlobUrl ?? previewFile ?? undefined}
+            documentId={previewBlobUrl || previewFile ? null : previewDocId}
             page={previewPage}
             onPageChange={setPreviewPage}
           />

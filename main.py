@@ -236,10 +236,23 @@ async def bulk_remove_documents(body: BulkDeleteRequest) -> dict:
 
 @app.get('/documents/{document_id}/file', dependencies=[Depends(require_session)], tags=['Documents'])
 async def get_document_file(document_id: str) -> FastAPIResponse:
+    from storage import StorageError
+
     document = await get_document(document_id)
     if not document:
         raise HTTPException(status_code=404, detail='Document not found.')
-    blob = download_pdf(document['storage_path'])
+    storage_path = document.get('storage_path') or ''
+    if not storage_path:
+        raise HTTPException(status_code=404, detail='PDF has not been stored yet.')
+    try:
+        blob = download_pdf(storage_path)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail='PDF file missing from storage. Set STORAGE_BACKEND=local or configure Supabase keys.',
+        ) from None
+    except StorageError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return FastAPIResponse(content=blob, media_type='application/pdf')
 
 

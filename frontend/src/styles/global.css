@@ -606,16 +606,50 @@ button {
 .pdf-viewport {
   flex: 1;
   overflow: auto;
-  display: flex;
-  justify-content: center;
   background: #000;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   min-height: 280px;
 }
 
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 0 1rem;
+  min-width: min-content;
+  margin: 0 auto;
+}
+
+.pdf-page-wrap {
+  position: relative;
+  margin-bottom: 0.75rem;
+  background: #fff;
+  line-height: 0;
+  isolation: isolate;
+}
+
+.pdf-page-wrap:last-child {
+  margin-bottom: 0;
+}
+
+.pdf-page-wrap .react-pdf__Page {
+  margin: 0;
+}
+
+.pdf-page-wrap .react-pdf__Page__canvas {
+  display: block;
+}
+
+.pdf-page-wrap .react-pdf__Page__textContent,
+.pdf-page-wrap .react-pdf__Page__annotations {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
 .pdf-viewport .react-pdf__Page {
-  margin: 0.5rem 0;
+  margin: 0;
 }
 
 .flashcard {

@@ -14,7 +14,7 @@
     "react-markdown": "^10.1.0",
     "react-pdf": "^9.2.1",
     "react-router-dom": "^7.6.2",
-    "pdfjs-dist": "^4.10.38"
+    "pdfjs-dist": "4.8.69"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
