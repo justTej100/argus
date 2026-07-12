@@ -14,6 +14,7 @@ export default defineConfig({
       '/logout': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
       '/admin': 'http://localhost:8000',
+      '/me': 'http://localhost:8000',
     },
   },
   build: {

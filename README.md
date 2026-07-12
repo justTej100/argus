@@ -1,6 +1,6 @@
 # Argus Study Buddy
 
-Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers with **page citations** (`[p12]`). Built for one student (you) — Google sign-in, minimal black/blue UI, embedded PDF viewer.
+Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers with **page citations** (`[p12]`). Google sign-in for anyone (guests are rate-limited); admin accounts get full upload/chat access.
 
 **Stack:** FastAPI backend · React frontend · LangChain RAG · Gemini · Supabase Postgres + Storage
 
@@ -8,11 +8,11 @@ Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers w
 
 ## What it does
 
-1. **Sign in** with Google (allowlisted email only)
-2. **Upload** PDF textbooks → background ingestion extracts text, chunks by page, embeds with Gemini
-3. **Study** in chat, quiz, flashcard, or summary mode — answers cite textbook pages
+1. **Sign in** with Google (any account; `ADMIN_EMAIL` gets full access)
+2. **Upload** PDF textbooks (admin) → background ingestion extracts text, chunks by page, embeds with Gemini
+3. **Study** in chat, quiz, flashcard, or summary mode — answers cite textbook pages (guests: cooldown + daily chat cap)
 4. **View** the PDF in-panel; citation chips jump to the right page
-5. **Inspect** the database on `/admin` (chunk counts, samples, links to Supabase dashboard)
+5. **Inspect** the database on `/admin` (admins only)
 
 Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.page` on each chunk.
 
@@ -23,7 +23,8 @@ Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.pa
 ```
 argus/
 ├── main.py                 # FastAPI app: API routes + serves React build
-├── auth.py                 # Google OAuth + signed session cookies
+├── auth.py                 # Google OAuth + signed session cookies (admin vs guest)
+├── rate_limit.py           # Guest chat cooldown + daily cap
 ├── citations.py            # [pN] parsing, validation, email link helpers
 ├── storage.py              # PDF files: Supabase Storage or local disk
 ├── jobs.py                 # In-process background ingestion (no Redis)
@@ -128,7 +129,9 @@ Copy `.env.example` to `.env`. Full key setup is below.
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `SECRET_KEY` | Yes | Signs session cookies |
-| `ADMIN_EMAIL` | Yes | Google account(s) allowed to sign in (comma-separated) |
+| `ADMIN_EMAIL` | Yes | Admin Google account(s) — unlimited chat, upload/delete, `/admin` |
+| `GUEST_CHAT_COOLDOWN_SECONDS` | Optional | Guest min seconds between chats (default `300`) |
+| `GUEST_CHAT_DAILY_LIMIT` | Optional | Guest max chats per UTC day (default `10`) |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
 | `GOOGLE_REDIRECT_URI` | Yes | `http://localhost:8000/auth/google/callback` (local) |
@@ -159,13 +162,15 @@ openssl rand -hex 32
 
 ### `ADMIN_EMAIL`
 
-Your Google address(es):
+Admin Google address(es) with full access (upload, delete, database page, unlimited chat). **Anyone** can sign in with Google as a guest; guests are rate-limited on chat.
 
 ```env
 ADMIN_EMAIL=you@gmail.com
 ```
 
-Multiple accounts: `you@gmail.com,partner@gmail.com`
+Multiple admins: `you@gmail.com,partner@gmail.com`
+
+Guest defaults: 1 chat every 5 minutes and 10 chats/day (`GUEST_CHAT_COOLDOWN_SECONDS`, `GUEST_CHAT_DAILY_LIMIT`).
 
 ### Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`)
 
@@ -267,16 +272,17 @@ SUPABASE_BUCKET=argus-pdfs
 | GET | `/health` | No | Health check |
 | GET | `/auth/google` | No | Start OAuth |
 | GET | `/logout` | No | Clear session |
-| GET | `/documents` | No | List textbooks |
-| POST | `/documents` | Yes | Upload PDF |
-| GET | `/documents/{id}/status` | No | Ingestion status |
+| GET | `/me` | Yes | Email, `is_admin`, chat quota |
+| GET | `/documents` | Yes | List textbooks |
+| POST | `/documents` | Admin | Upload PDF |
+| GET | `/documents/{id}/status` | Yes | Ingestion status |
 | GET | `/documents/{id}/file` | Yes | PDF bytes (viewer) |
-| DELETE | `/documents/{id}` | Yes | Delete one book |
-| POST | `/documents/bulk-delete` | Yes | Delete many |
-| POST | `/chat` | Yes | Ask question (RAG) |
-| GET | `/admin/config` | Yes | Supabase dashboard URLs |
-| GET | `/admin/stats` | Yes | Document + vector counts |
-| GET | `/admin/documents/{id}/chunks` | Yes | Sample chunks |
+| DELETE | `/documents/{id}` | Admin | Delete one book |
+| POST | `/documents/bulk-delete` | Admin | Delete many |
+| POST | `/chat` | Yes | Ask question (RAG; guests rate-limited) |
+| GET | `/admin/config` | Admin | Supabase dashboard URLs |
+| GET | `/admin/stats` | Admin | Document + vector counts |
+| GET | `/admin/documents/{id}/chunks` | Admin | Sample chunks |
 
 React pages: `/login`, `/` (library), `/study`, `/admin`
 

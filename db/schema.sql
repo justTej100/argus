@@ -20,3 +20,11 @@ CREATE INDEX IF NOT EXISTS documents_uploaded_at_idx
 
 -- Migrate existing databases that still have course instead of description
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS description TEXT;
+
+-- Guest chat rate limits (keyed by email)
+CREATE TABLE IF NOT EXISTS chat_usage (
+    email TEXT PRIMARY KEY,
+    last_chat_at TIMESTAMPTZ,
+    day_date DATE,
+    day_count INTEGER NOT NULL DEFAULT 0
+);

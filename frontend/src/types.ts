@@ -45,3 +45,15 @@ export type StudyResponse = {
 };
 
 export type StudyMode = 'chat' | 'quiz' | 'flashcards' | 'summary';
+
+export type MeResponse = {
+  email: string;
+  is_admin: boolean;
+  chat: {
+    cooldown_seconds: number;
+    daily_limit: number;
+    remaining_today: number | null;
+    retry_after_seconds: number;
+    unlimited: boolean;
+  };
+};

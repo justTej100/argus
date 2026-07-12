@@ -1,11 +1,33 @@
 /**
  * HTTP client for the FastAPI backend.
  * All requests use credentials: 'include' for session cookies.
- * Dev: Vite proxies /auth, /documents, /chat, /admin to localhost:8000.
+ * Dev: Vite proxies /auth, /documents, /chat, /admin, /me to localhost:8000.
  */
-import type { ChatMessage, Document, Scope, Source, StudyMode, StudyResponse } from './types';
+import type { ChatMessage, Document, MeResponse, Scope, Source, StudyMode, StudyResponse } from './types';
+
+export type { MeResponse };
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
+
+function formatDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object') {
+    const obj = detail as Record<string, unknown>;
+    if (typeof obj.message === 'string') {
+      const parts = [obj.message];
+      if (typeof obj.retry_after_seconds === 'number' && obj.retry_after_seconds > 0) {
+        const mins = Math.ceil(obj.retry_after_seconds / 60);
+        parts.push(`Next chat in ~${mins} min.`);
+      }
+      if (typeof obj.remaining_today === 'number') {
+        parts.push(`${obj.remaining_today} left today.`);
+      }
+      return parts.join(' ');
+    }
+    return JSON.stringify(detail);
+  }
+  return fallback;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -14,28 +36,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { ...jsonHeaders, ...init?.headers },
   });
   if (!res.ok) {
-    let detail = res.statusText;
+    let detail: unknown = res.statusText;
     try {
       const body = await res.json();
-      detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+      detail = body.detail ?? detail;
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `Request failed (${res.status})`);
+    throw new Error(formatDetail(detail, `Request failed (${res.status})`));
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
-/** Uses existing /chat — 401 means logged out, 400 means session is valid. */
+/** Session check via /me — 401 means logged out. */
 export async function isAuthenticated(): Promise<boolean> {
-  const res = await fetch('/chat', {
-    method: 'POST',
-    credentials: 'include',
-    headers: jsonHeaders,
-    body: JSON.stringify({ messages: [] }),
-  });
-  return res.status !== 401;
+  const res = await fetch('/me', { credentials: 'include' });
+  return res.status === 200;
+}
+
+export function getMe(): Promise<MeResponse> {
+  return request<MeResponse>('/me');
 }
 
 export function listDocuments(): Promise<Document[]> {
@@ -59,7 +80,7 @@ export async function uploadDocument(file: File, title: string, description?: st
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || 'Upload failed');
+    throw new Error(formatDetail(body.detail, 'Upload failed'));
   }
   return res.json();
 }

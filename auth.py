@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-"""Session-cookie authentication helpers for the single-user app.
+"""Session-cookie authentication helpers.
 
-Google OAuth verifies the admin email and stores a signed session cookie in the
-browser. There is no user table or API key issuance flow.
+Google OAuth accepts any signed-in Google account. ADMIN_EMAIL (comma-separated)
+marks admin users who get unlimited chat and mutation/admin routes.
 """
 
 import os
@@ -37,7 +37,7 @@ def issue_session_token(email: str) -> str:
 
 
 def set_session_cookie(response: Response, email: str) -> None:
-    """Set the signed session cookie for an authenticated admin."""
+    """Set the signed session cookie for an authenticated user."""
     token = issue_session_token(email)
     response.set_cookie(
         COOKIE_NAME,
@@ -62,7 +62,7 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def allowed_emails() -> set[str]:
-    """Return the set of emails allowed to sign in (comma-separated ADMIN_EMAIL)."""
+    """Return admin emails from comma-separated ADMIN_EMAIL."""
     raw = os.environ.get('ADMIN_EMAIL', '')
     emails = {part.strip().lower() for part in raw.split(',') if part.strip()}
     if not emails:
@@ -70,8 +70,28 @@ def allowed_emails() -> set[str]:
     return emails
 
 
+def is_admin_email(email: str | None) -> bool:
+    """Return True when email is in the ADMIN_EMAIL allowlist."""
+    if not email:
+        return False
+    try:
+        return email.strip().lower() in allowed_emails()
+    except HTTPException:
+        return False
+
+
+def normalize_login_email(email: str | None) -> str:
+    """Accept any non-empty Google email for session creation."""
+    if not email or not str(email).strip():
+        raise HTTPException(status_code=400, detail='Google account did not provide an email.')
+    return str(email).strip()
+
+
 def verify_admin_email(email: str | None) -> str:
-    """Return the email when it is in the allowlist; otherwise raise 403."""
+    """Return the email when it is an admin; otherwise raise 403.
+
+    Kept for tests and explicit admin checks; login no longer uses this gate.
+    """
     if not email or email.strip().lower() not in allowed_emails():
         raise HTTPException(status_code=403, detail='Email is not authorized.')
     return email.strip()
@@ -109,3 +129,11 @@ def require_session(request: Request) -> None:
     """Raise HTTP 401 when the request is not authenticated."""
     if not session_is_valid(request):
         raise HTTPException(status_code=401, detail='Login required.')
+
+
+def require_admin(request: Request) -> None:
+    """Raise 401 if logged out, 403 if logged in but not an admin."""
+    require_session(request)
+    email = get_session_email(request)
+    if not is_admin_email(email):
+        raise HTTPException(status_code=403, detail='Admin access required.')

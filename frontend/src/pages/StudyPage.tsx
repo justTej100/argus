@@ -3,12 +3,14 @@ import { useSearchParams } from 'react-router-dom';
 import { chat, emailFlashcards, extractPages } from '../api';
 import AnswerBlock from '../components/AnswerBlock';
 import PdfViewer from '../components/PdfViewer';
+import { useMe } from '../me';
 import type { ChatMessage, Document, Source, StudyMode } from '../types';
 
 type FlashcardItem = { front: string; back: string; citations?: string[] };
 type QuizItem = { question: string; answer: string; citations?: string[] };
 
 export default function StudyPage() {
+  const me = useMe();
   const [searchParams] = useSearchParams();
   const initialDoc = searchParams.get('document') || '';
 
@@ -190,6 +192,9 @@ export default function StudyPage() {
         {readyDocs.length
           ? `${readyDocs.length} textbook(s) ready`
           : 'Upload a textbook on the Library page first.'}
+        {me && !me.is_admin && me.chat.remaining_today != null
+          ? ` · Guest: ${me.chat.remaining_today}/${me.chat.daily_limit} chats left today`
+          : ''}
       </p>
 
       <div className="scope-row">

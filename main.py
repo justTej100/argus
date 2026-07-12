@@ -20,10 +20,19 @@ from typing import Literal
 
 from agents.Pipeline import ResearchPipeline
 from ai.clients import GeminiAPIError
-from auth import clear_session_cookie, get_session_email, require_session, set_session_cookie, verify_admin_email
+from auth import (
+    clear_session_cookie,
+    get_session_email,
+    is_admin_email,
+    normalize_login_email,
+    require_admin,
+    require_session,
+    set_session_cookie,
+)
 from db.client import create_document, delete_document, get_document, init_schema, list_documents, update_document_status
 from jobs import schedule_ingestion
 from mail.gmail import EmailNotConfiguredError, send_flashcards_email
+from rate_limit import check_and_record_chat, get_chat_usage, usage_status
 from storage import delete_pdf, download_pdf, supabase_dashboard_urls, upload_pdf
 
 load_dotenv(Path(__file__).parent / '.env')
@@ -150,13 +159,13 @@ async def auth_google_callback(request: Request):
         userinfo = token.get('userinfo')
         if not userinfo:
             userinfo = await oauth.google.parse_id_token(request, token)
-        email = verify_admin_email(userinfo.get('email'))
+        email = normalize_login_email(userinfo.get('email') if userinfo else None)
         response = RedirectResponse(url='/', status_code=302)
         set_session_cookie(response, email)
         return response
     except HTTPException as exc:
-        if exc.status_code == 403:
-            return RedirectResponse(url='/login?error=unauthorized', status_code=302)
+        if exc.status_code == 400:
+            return RedirectResponse(url='/login?error=oauth_failed', status_code=302)
         raise
     except Exception:
         return RedirectResponse(url='/login?error=oauth_failed', status_code=302)
@@ -169,12 +178,24 @@ def logout() -> RedirectResponse:
     return response
 
 
-@app.get('/documents', tags=['Documents'])
+@app.get('/me', tags=['Auth'], dependencies=[Depends(require_session)])
+async def me(request: Request) -> dict:
+    email = get_session_email(request) or ''
+    admin = is_admin_email(email)
+    usage = await get_chat_usage(email) if email else {}
+    return {
+        'email': email,
+        'is_admin': admin,
+        'chat': usage_status(usage, is_admin=admin),
+    }
+
+
+@app.get('/documents', tags=['Documents'], dependencies=[Depends(require_session)])
 async def documents() -> list[dict]:
     return await list_documents()
 
 
-@app.post('/documents', tags=['Documents'], dependencies=[Depends(require_session)])
+@app.post('/documents', tags=['Documents'], dependencies=[Depends(require_admin)])
 async def upload_document(
     file: UploadFile = File(...),
     title: str = Form(...),
@@ -198,7 +219,7 @@ async def upload_document(
     return {'id': document_id, 'status': 'processing', 'job_id': job_id}
 
 
-@app.get('/documents/{document_id}/status', tags=['Documents'])
+@app.get('/documents/{document_id}/status', tags=['Documents'], dependencies=[Depends(require_session)])
 async def document_status(document_id: str) -> dict:
     document = await get_document(document_id)
     if not document:
@@ -212,7 +233,7 @@ async def document_status(document_id: str) -> dict:
     }
 
 
-@app.delete('/documents/{document_id}', tags=['Documents'], dependencies=[Depends(require_session)])
+@app.delete('/documents/{document_id}', tags=['Documents'], dependencies=[Depends(require_admin)])
 async def remove_document(document_id: str) -> dict:
     document = await get_document(document_id)
     if document:
@@ -221,7 +242,7 @@ async def remove_document(document_id: str) -> dict:
     return {'ok': True}
 
 
-@app.post('/documents/bulk-delete', tags=['Documents'], dependencies=[Depends(require_session)])
+@app.post('/documents/bulk-delete', tags=['Documents'], dependencies=[Depends(require_admin)])
 async def bulk_remove_documents(body: BulkDeleteRequest) -> dict:
     deleted: list[str] = []
     for document_id in body.document_ids:
@@ -261,6 +282,9 @@ async def chat(request: Request, body: ChatRequest) -> StudyResponse:
     user_messages = [m for m in body.messages if m.role == 'user']
     if not user_messages:
         raise HTTPException(status_code=400, detail='At least one user message is required.')
+
+    email = get_session_email(request) or ''
+    await check_and_record_chat(email, is_admin=is_admin_email(email))
 
     query = user_messages[-1].content
     history = [{'role': m.role, 'content': m.content} for m in body.messages[:-1]] or None
@@ -314,7 +338,7 @@ async def search(request: Request, body: ChatRequest) -> StudyResponse:
     return await chat(request, body)
 
 
-@app.get('/admin/config', tags=['Admin'], dependencies=[Depends(require_session)])
+@app.get('/admin/config', tags=['Admin'], dependencies=[Depends(require_admin)])
 async def admin_config() -> dict:
     urls = supabase_dashboard_urls()
     return {
@@ -323,7 +347,7 @@ async def admin_config() -> dict:
     }
 
 
-@app.get('/admin/stats', tags=['Admin'], dependencies=[Depends(require_session)])
+@app.get('/admin/stats', tags=['Admin'], dependencies=[Depends(require_admin)])
 async def admin_stats() -> dict:
     from ai.langchain_store import count_vectors, count_vectors_for_document
 
@@ -349,7 +373,7 @@ async def admin_stats() -> dict:
     }
 
 
-@app.get('/admin/documents/{document_id}/chunks', tags=['Admin'], dependencies=[Depends(require_session)])
+@app.get('/admin/documents/{document_id}/chunks', tags=['Admin'], dependencies=[Depends(require_admin)])
 async def admin_document_chunks(document_id: str, limit: int = 5) -> dict:
     from ai.langchain_store import sample_vectors
 

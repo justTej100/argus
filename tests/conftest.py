@@ -19,10 +19,17 @@ from fastapi.testclient import TestClient
 def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     os.environ['SECRET_KEY'] = 'test-secret-key'
     os.environ['ADMIN_EMAIL'] = 'admin@test.com'
+    os.environ.pop('DATABASE_URL', None)
+    os.environ['GUEST_CHAT_COOLDOWN_SECONDS'] = '300'
+    os.environ['GUEST_CHAT_DAILY_LIMIT'] = '10'
 
     project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
+
+    from rate_limit import reset_memory_usage
+
+    reset_memory_usage()
 
     import main  # type: ignore
 
@@ -134,4 +141,12 @@ def authenticated_client(client: TestClient) -> TestClient:
     from auth import COOKIE_NAME, issue_session_token
 
     client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    return client
+
+
+@pytest.fixture
+def guest_client(client: TestClient) -> TestClient:
+    from auth import COOKIE_NAME, issue_session_token
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('guest@example.com'), path='/')
     return client

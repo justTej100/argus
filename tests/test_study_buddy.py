@@ -74,6 +74,55 @@ def test_bulk_delete_requires_session(client):
     assert response.status_code == 401
 
 
+def test_guest_upload_forbidden(guest_client):
+    upload = guest_client.post(
+        '/documents',
+        files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
+        data={'title': 'Nope'},
+    )
+    assert upload.status_code == 403
+
+
+def test_guest_chat_rate_limited(guest_client):
+    first = guest_client.post(
+        '/chat',
+        json={
+            'messages': [{'role': 'user', 'content': 'hello'}],
+            'mode': 'chat',
+            'scope': {'type': 'library'},
+        },
+    )
+    assert first.status_code == 200
+
+    second = guest_client.post(
+        '/chat',
+        json={
+            'messages': [{'role': 'user', 'content': 'again'}],
+            'mode': 'chat',
+            'scope': {'type': 'library'},
+        },
+    )
+    assert second.status_code == 429
+    detail = second.json()['detail']
+    assert detail['retry_after_seconds'] > 0
+
+
+def test_me_returns_role(client):
+    from auth import COOKIE_NAME, issue_session_token
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    admin_me = client.get('/me')
+    assert admin_me.status_code == 200
+    assert admin_me.json()['is_admin'] is True
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('guest@example.com'), path='/')
+    guest_me = client.get('/me')
+    assert guest_me.status_code == 200
+    body = guest_me.json()
+    assert body['is_admin'] is False
+    assert body['chat']['unlimited'] is False
+
+
 def test_bulk_delete_removes_documents(authenticated_client):
     for title in ('Book A', 'Book B'):
         upload = authenticated_client.post(

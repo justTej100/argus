@@ -9,6 +9,7 @@ import {
 } from '../api';
 import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 import PdfViewer from '../components/PdfViewer';
+import { useMe } from '../me';
 import type { Document } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
@@ -20,6 +21,8 @@ function StatusBadge({ status }: { status: string }) {
 type DeleteTarget = { ids: string[]; titles: string[]; label: string };
 
 export default function LibraryPage() {
+  const me = useMe();
+  const isAdmin = Boolean(me?.is_admin);
   const [docs, setDocs] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchFilter, setSearchFilter] = useState('');
@@ -196,8 +199,11 @@ export default function LibraryPage() {
       />
 
       <h1 className="page-title">Library</h1>
-      <p className="page-sub">Upload PDFs · embeddings build automatically</p>
+      <p className="page-sub">
+        {isAdmin ? 'Upload PDFs · embeddings build automatically' : 'Browse textbooks and open Study to chat (guest rate limits apply)'}
+      </p>
 
+      {isAdmin && (
       <div className="upload-compact panel">
         <p className="section-label">Upload</p>
         <div className="upload-row">
@@ -241,8 +247,15 @@ export default function LibraryPage() {
           />
         </div>
       </div>
+      )}
 
-      <div style={{ marginTop: '1.5rem' }}>
+      {!isAdmin && previewDocId && (
+        <div className="panel" style={{ marginBottom: '1rem' }}>
+          <PdfViewer documentId={previewDocId} page={previewPage} onPageChange={setPreviewPage} />
+        </div>
+      )}
+
+      <div style={{ marginTop: isAdmin ? '1.5rem' : 0 }}>
         <p className="section-label">Your textbooks</p>
         <div className="toolbar">
           <input
@@ -254,15 +267,19 @@ export default function LibraryPage() {
           <button type="button" className="btn btn-ghost" onClick={refresh}>
             Refresh
           </button>
-          <button type="button" className="btn btn-ghost" onClick={() => setSelected(new Set(docs.map((d) => d.id)))}>
-            Select all
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => setSelected(new Set())}>
-            Clear
-          </button>
-          <button type="button" className="btn btn-danger" disabled={!selected.size || deleting} onClick={openBulkDelete}>
-            Delete ({selected.size})
-          </button>
+          {isAdmin && (
+            <>
+              <button type="button" className="btn btn-ghost" onClick={() => setSelected(new Set(docs.map((d) => d.id)))}>
+                Select all
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => setSelected(new Set())}>
+                Clear
+              </button>
+              <button type="button" className="btn btn-danger" disabled={!selected.size || deleting} onClick={openBulkDelete}>
+                Delete ({selected.size})
+              </button>
+            </>
+          )}
           <Link to="/study" className="btn btn-primary">
             Study
           </Link>
@@ -273,7 +290,9 @@ export default function LibraryPage() {
         {filteredDocs.map((doc) => (
           <div key={doc.id} className="doc-row">
             <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
-              <input type="checkbox" checked={selected.has(doc.id)} onChange={() => toggle(doc.id)} />
+              {isAdmin && (
+                <input type="checkbox" checked={selected.has(doc.id)} onChange={() => toggle(doc.id)} />
+              )}
               <div>
                 <div className="doc-row-title">{doc.title}</div>
                 <div className="doc-meta">
@@ -299,9 +318,11 @@ export default function LibraryPage() {
               }}>
                 Preview
               </button>
-              <button type="button" className="btn btn-danger" disabled={deleting} onClick={() => openSingleDelete(doc)}>
-                Delete
-              </button>
+              {isAdmin && (
+                <button type="button" className="btn btn-danger" disabled={deleting} onClick={() => openSingleDelete(doc)}>
+                  Delete
+                </button>
+              )}
             </div>
           </div>
         ))}

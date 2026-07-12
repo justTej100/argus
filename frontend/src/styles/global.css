@@ -100,6 +100,15 @@ button {
   text-decoration: none;
 }
 
+.nav-user {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .main {
   flex: 1;
   padding: 1.5rem;
@@ -349,13 +358,30 @@ button {
 .login-card p {
   color: var(--text-muted);
   font-size: 0.9rem;
-  margin: 0 0 1.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.login-hint {
+  font-size: 0.8rem !important;
+  line-height: 1.4;
+  margin-bottom: 1.25rem !important;
 }
 
 .login-error {
   color: var(--danger);
   font-size: 0.85rem;
   margin-bottom: 1rem;
+}
+
+.login-repo {
+  display: inline-block;
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.login-repo:hover {
+  color: var(--accent);
 }
 
 /* library */
