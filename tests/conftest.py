@@ -46,6 +46,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             'storage_path': storage_path,
             'has_scan_warning': False,
             'error_message': None,
+            'flashcards_open': False,
         }
         return doc_id
 
@@ -83,6 +84,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     def schedule_ingestion(document_id: str, storage_path: str) -> str:
         return f'ingest-{document_id}'
 
+    async def set_flashcards_open(document_id: str, enabled: bool):
+        doc = state.get(document_id)
+        if not doc:
+            return None
+        doc['flashcards_open'] = bool(enabled)
+        return dict(doc)
+
     monkeypatch.setattr(main, 'create_document', create_document)
     monkeypatch.setattr(main, 'update_document_status', update_document_status)
     monkeypatch.setattr(main, 'get_document', get_document)
@@ -90,6 +98,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(main, 'delete_document', delete_document)
     monkeypatch.setattr(main, 'upload_pdf', upload_pdf)
     monkeypatch.setattr(main, 'schedule_ingestion', schedule_ingestion)
+    monkeypatch.setattr(main, 'set_flashcards_open', set_flashcards_open)
+    monkeypatch.setattr('db.subscriptions.get_document', get_document)
+    monkeypatch.setattr('db.subscriptions.list_documents', list_documents)
 
     monkeypatch.setattr(main, 'download_pdf', lambda _path: b'%PDF-1.4\n%test')
     monkeypatch.setattr(main, 'delete_pdf', lambda _path: None)

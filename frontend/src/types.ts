@@ -6,6 +6,15 @@ export type Document = {
   total_pages?: number | null;
   has_scan_warning?: boolean;
   error_message?: string | null;
+  flashcards_open?: boolean;
+};
+
+export type FlashcardOffer = {
+  document_id: string;
+  title: string;
+  description?: string | null;
+  subscribed: boolean;
+  subscriber_count: number;
 };
 
 export type ChatMessage = {

@@ -30,6 +30,13 @@ from auth import (
     set_session_cookie,
 )
 from db.client import create_document, delete_document, get_document, init_schema, list_documents, update_document_status
+from db.subscriptions import (
+    list_flashcard_offers,
+    list_subscriber_emails,
+    set_flashcards_open,
+    subscribe as subscribe_flashcards,
+    unsubscribe as unsubscribe_flashcards,
+)
 from jobs import schedule_ingestion
 from mail.gmail import EmailNotConfiguredError, send_flashcards_email
 from rate_limit import check_and_record_chat, get_chat_usage, usage_status
@@ -43,9 +50,14 @@ FRONTEND_DIST = Path(__file__).parent / 'frontend' / 'dist'
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     await init_schema()
-    from ai.langchain_store import ensure_vector_table
+    try:
+        from ai.langchain_store import ensure_vector_table
 
-    await ensure_vector_table()
+        await ensure_vector_table()
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning('Vector table init skipped: %s', exc)
     yield
 
 
@@ -94,6 +106,21 @@ class FlashcardEmailRequest(BaseModel):
     sources: list[dict] = []
 
 
+class FlashcardSubscribeRequest(BaseModel):
+    document_id: str
+
+
+class FlashcardOpenRequest(BaseModel):
+    enabled: bool
+
+
+class FlashcardBroadcastRequest(BaseModel):
+    document_id: str
+    topic: str
+    items: list[dict]
+    sources: list[dict] = []
+
+
 class BulkDeleteRequest(BaseModel):
     document_ids: list[str]
 
@@ -137,6 +164,74 @@ async def email_flashcards(request: Request, body: FlashcardEmailRequest) -> dic
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {'ok': True, 'to': recipient, 'count': len(body.items)}
+
+
+@app.get('/flashcards/offers', tags=['Flashcards'], dependencies=[Depends(require_session)])
+async def flashcard_offers(request: Request) -> list[dict]:
+    email = get_session_email(request)
+    return await list_flashcard_offers(email)
+
+
+@app.post('/flashcards/subscribe', tags=['Flashcards'], dependencies=[Depends(require_session)])
+async def flashcard_subscribe(request: Request, body: FlashcardSubscribeRequest) -> dict:
+    email = get_session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail='Login required.')
+    try:
+        await subscribe_flashcards(email, body.document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'ok': True, 'document_id': body.document_id, 'subscribed': True}
+
+
+@app.post('/flashcards/unsubscribe', tags=['Flashcards'], dependencies=[Depends(require_session)])
+async def flashcard_unsubscribe(request: Request, body: FlashcardSubscribeRequest) -> dict:
+    email = get_session_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail='Login required.')
+    await unsubscribe_flashcards(email, body.document_id)
+    return {'ok': True, 'document_id': body.document_id, 'subscribed': False}
+
+
+@app.patch('/documents/{document_id}/flashcards-open', tags=['Documents'], dependencies=[Depends(require_admin)])
+async def document_flashcards_open(document_id: str, body: FlashcardOpenRequest) -> dict:
+    document = await set_flashcards_open(document_id, body.enabled)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    return {
+        'id': document['id'],
+        'flashcards_open': bool(document.get('flashcards_open')),
+        'title': document.get('title'),
+    }
+
+
+@app.post('/flashcards/broadcast', tags=['Flashcards'], dependencies=[Depends(require_admin)])
+async def flashcard_broadcast(body: FlashcardBroadcastRequest) -> dict:
+    document = await get_document(body.document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    if not body.items:
+        raise HTTPException(status_code=400, detail='No flashcards to email.')
+    recipients = await list_subscriber_emails(body.document_id)
+    if not recipients:
+        return {'ok': True, 'sent': 0, 'failed': 0, 'recipients': []}
+
+    sent = 0
+    failed = 0
+    for recipient in recipients:
+        try:
+            send_flashcards_email(
+                to_email=recipient,
+                topic=body.topic,
+                items=body.items,
+                sources=body.sources,
+            )
+            sent += 1
+        except EmailNotConfiguredError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception:
+            failed += 1
+    return {'ok': True, 'sent': sent, 'failed': failed, 'recipients': recipients}
 
 
 @app.get('/health', tags=['Meta'])

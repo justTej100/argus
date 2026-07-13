@@ -11,8 +11,9 @@ Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers w
 1. **Sign in** with Google (any account; `ADMIN_EMAIL` gets full access)
 2. **Upload** PDF textbooks (admin) → background ingestion extracts text, chunks by page, embeds with Gemini
 3. **Study** in chat, quiz, flashcard, or summary mode — answers cite textbook pages (guests: cooldown + daily chat cap)
-4. **View** the PDF in-panel; citation chips jump to the right page
-5. **Inspect** the database on `/admin` (admins only)
+4. **Flashcard signup** — admin opens a textbook for signup; guests subscribe/unsubscribe; admin can email a deck to all subscribers
+5. **View** the PDF in-panel; citation chips jump to the right page
+6. **Inspect** the database on `/admin` (admins only)
 
 Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.page` on each chunk.
 
@@ -280,6 +281,11 @@ SUPABASE_BUCKET=argus-pdfs
 | DELETE | `/documents/{id}` | Admin | Delete one book |
 | POST | `/documents/bulk-delete` | Admin | Delete many |
 | POST | `/chat` | Yes | Ask question (RAG; guests rate-limited) |
+| GET | `/flashcards/offers` | Yes | Textbooks open for flashcard signup |
+| POST | `/flashcards/subscribe` | Yes | Subscribe to a textbook's flashcards |
+| POST | `/flashcards/unsubscribe` | Yes | Unsubscribe |
+| POST | `/flashcards/broadcast` | Admin | Email flashcard deck to all subscribers |
+| PATCH | `/documents/{id}/flashcards-open` | Admin | Open/close guest flashcard signup |
 | GET | `/admin/config` | Admin | Supabase dashboard URLs |
 | GET | `/admin/stats` | Admin | Document + vector counts |
 | GET | `/admin/documents/{id}/chunks` | Admin | Sample chunks |
@@ -318,7 +324,7 @@ After deploy, **re-upload textbooks** if migrating from an older schema so vecto
 | Upload fails (storage) | Use `SUPABASE_SERVICE_KEY`, not publishable key; set `STORAGE_BACKEND=supabase` |
 | Stuck on `processing` | Check terminal logs; usually `GEMINI_API_KEY` or PDF extract failure |
 | Chat 429 / 503 | Gemini quota or outage; retry or change `GEMINI_MODEL` |
-| DB connection error | URL-encode password in `DATABASE_URL`; wake paused Supabase project |
+| DB connection error | URL-encode password in `DATABASE_URL`; wake paused Supabase project; copy a **fresh** URI from Dashboard → Database (error `tenant/user … not found` = wrong/old project ref). App falls back to in-memory if Postgres is unreachable. |
 | Blank UI | Run `make frontend` before `make app`; need `frontend/dist` |
 | Old books have no answers | Re-upload after LangChain migration — chunks live in `argus_vectors` |
 

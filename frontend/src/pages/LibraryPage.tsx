@@ -5,12 +5,16 @@ import {
   deleteDocument,
   getDocumentStatus,
   listDocuments,
+  listFlashcardOffers,
+  setFlashcardsOpen,
+  subscribeFlashcards,
+  unsubscribeFlashcards,
   uploadDocument,
 } from '../api';
 import ConfirmDeleteModal from '../components/ConfirmDeleteModal';
 import PdfViewer from '../components/PdfViewer';
 import { useMe } from '../me';
-import type { Document } from '../types';
+import type { Document, FlashcardOffer } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
   const cls =
@@ -39,12 +43,15 @@ export default function LibraryPage() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [offers, setOffers] = useState<FlashcardOffer[]>([]);
+  const [subBusy, setSubBusy] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await listDocuments();
+      const [list, offerList] = await Promise.all([listDocuments(), listFlashcardOffers()]);
       setDocs(list);
+      setOffers(offerList);
       setSelected((prev) => {
         const ids = new Set(list.map((d) => d.id));
         return new Set([...prev].filter((id) => ids.has(id)));
@@ -186,6 +193,31 @@ export default function LibraryPage() {
     }
   };
 
+  const toggleFlashcardsOpen = async (doc: Document) => {
+    setSubBusy(doc.id);
+    try {
+      await setFlashcardsOpen(doc.id, !doc.flashcards_open);
+      await refresh();
+    } catch (e) {
+      setUploadMsg(e instanceof Error ? e.message : 'Failed to update signup');
+    } finally {
+      setSubBusy(null);
+    }
+  };
+
+  const toggleSubscribe = async (documentId: string, subscribed: boolean) => {
+    setSubBusy(documentId);
+    try {
+      if (subscribed) await unsubscribeFlashcards(documentId);
+      else await subscribeFlashcards(documentId);
+      await refresh();
+    } catch (e) {
+      setUploadMsg(e instanceof Error ? e.message : 'Subscription update failed');
+    } finally {
+      setSubBusy(null);
+    }
+  };
+
   return (
     <div>
       <ConfirmDeleteModal
@@ -298,6 +330,7 @@ export default function LibraryPage() {
                 <div className="doc-meta">
                   {doc.description ? `${doc.description} · ` : ''}
                   <StatusBadge status={doc.status} />
+                  {doc.flashcards_open ? ' · Flashcard signup open' : ''}
                 </div>
               </div>
             </div>
@@ -318,6 +351,16 @@ export default function LibraryPage() {
               }}>
                 Preview
               </button>
+              {isAdmin && doc.status === 'ready' && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={subBusy === doc.id}
+                  onClick={() => toggleFlashcardsOpen(doc)}
+                >
+                  {doc.flashcards_open ? 'Close flashcard signup' : 'Open flashcard signup'}
+                </button>
+              )}
               {isAdmin && (
                 <button type="button" className="btn btn-danger" disabled={deleting} onClick={() => openSingleDelete(doc)}>
                   Delete
@@ -327,6 +370,37 @@ export default function LibraryPage() {
           </div>
         ))}
       </div>
+
+      {offers.length > 0 && (
+        <div style={{ marginTop: '1.5rem' }}>
+          <p className="section-label">Flashcard signup</p>
+          <p className="page-sub" style={{ marginBottom: '0.75rem' }}>
+            {isAdmin
+              ? 'Guests can subscribe to these textbooks. Generate flashcards in Study (one textbook) and send to subscribers.'
+              : 'Subscribe to get flashcards by email when the admin sends a deck for that textbook. Unsubscribe anytime.'}
+          </p>
+          {offers.map((offer) => (
+            <div key={offer.document_id} className="doc-row">
+              <div>
+                <div className="doc-row-title">{offer.title}</div>
+                <div className="doc-meta">
+                  {offer.description ? `${offer.description} · ` : ''}
+                  {offer.subscriber_count} subscriber{offer.subscriber_count === 1 ? '' : 's'}
+                  {offer.subscribed ? ' · You are subscribed' : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                className={offer.subscribed ? 'btn btn-ghost' : 'btn btn-primary'}
+                disabled={subBusy === offer.document_id}
+                onClick={() => toggleSubscribe(offer.document_id, offer.subscribed)}
+              >
+                {offer.subscribed ? 'Unsubscribe' : 'Subscribe'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

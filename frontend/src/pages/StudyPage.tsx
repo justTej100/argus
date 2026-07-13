@@ -1,6 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { chat, emailFlashcards, extractPages } from '../api';
+import { chat, broadcastFlashcards, emailFlashcards, extractPages } from '../api';
 import AnswerBlock from '../components/AnswerBlock';
 import PdfViewer from '../components/PdfViewer';
 import { useMe } from '../me';
@@ -126,6 +126,17 @@ export default function StudyPage() {
     }
   };
 
+  const handleBroadcastFlashcards = async () => {
+    if (!lastFlashcards?.length || !docId || scopeType !== 'document') return;
+    try {
+      const result = await broadcastFlashcards(docId, lastTopic, lastFlashcards, sources);
+      setError('');
+      alert(`Sent to ${result.sent} subscriber(s)${result.failed ? ` (${result.failed} failed)` : ''}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Broadcast failed');
+    }
+  };
+
   const renderAssistantContent = () => {
     if (mode === 'chat' && messages.length) {
       const last = [...messages].reverse().find((m) => m.role === 'assistant');
@@ -221,8 +232,11 @@ export default function StudyPage() {
         {mode === 'flashcards' && (
           <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <input type="checkbox" checked={emailFlashcardsFlag} onChange={(e) => setEmailFlashcardsFlag(e.target.checked)} />
-            Email flashcards
+            Email me
           </label>
+        )}
+        {mode === 'flashcards' && me?.is_admin && (
+          <span className="doc-meta">Tip: open signup on Library, then use “Send to subscribers” for one textbook.</span>
         )}
       </div>
 
@@ -276,9 +290,16 @@ export default function StudyPage() {
                 Send
               </button>
               {mode === 'flashcards' && lastFlashcards?.length ? (
-                <button type="button" className="btn btn-ghost" onClick={handleEmailFlashcards}>
-                  Email last flashcards
-                </button>
+                <>
+                  <button type="button" className="btn btn-ghost" onClick={handleEmailFlashcards}>
+                    Email last flashcards
+                  </button>
+                  {me?.is_admin && scopeType === 'document' && docId ? (
+                    <button type="button" className="btn btn-ghost" onClick={handleBroadcastFlashcards}>
+                      Send to subscribers
+                    </button>
+                  ) : null}
+                </>
               ) : null}
             </div>
             {error && <p className="login-error">{error}</p>}

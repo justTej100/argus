@@ -4,8 +4,9 @@
  * Dev: Vite proxies /auth, /documents, /chat, /admin, /me to localhost:8000.
  */
 import type { ChatMessage, Document, MeResponse, Scope, Source, StudyMode, StudyResponse } from './types';
+import type { FlashcardOffer } from './types';
 
-export type { MeResponse };
+export type { MeResponse, FlashcardOffer };
 
 const jsonHeaders = { 'Content-Type': 'application/json' };
 
@@ -117,6 +118,43 @@ export function emailFlashcards(topic: string, items: unknown[], sources: Source
   return request('/flashcards/email', {
     method: 'POST',
     body: JSON.stringify({ topic, items, sources }),
+  });
+}
+
+export function listFlashcardOffers(): Promise<FlashcardOffer[]> {
+  return request<FlashcardOffer[]>('/flashcards/offers');
+}
+
+export function subscribeFlashcards(documentId: string): Promise<void> {
+  return request('/flashcards/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ document_id: documentId }),
+  });
+}
+
+export function unsubscribeFlashcards(documentId: string): Promise<void> {
+  return request('/flashcards/unsubscribe', {
+    method: 'POST',
+    body: JSON.stringify({ document_id: documentId }),
+  });
+}
+
+export function setFlashcardsOpen(documentId: string, enabled: boolean): Promise<{ flashcards_open: boolean }> {
+  return request(`/documents/${encodeURIComponent(documentId)}/flashcards-open`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function broadcastFlashcards(
+  documentId: string,
+  topic: string,
+  items: unknown[],
+  sources: Source[],
+): Promise<{ sent: number; failed: number }> {
+  return request('/flashcards/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ document_id: documentId, topic, items, sources }),
   });
 }
 

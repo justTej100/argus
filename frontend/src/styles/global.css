@@ -373,8 +373,23 @@ button {
   margin-bottom: 1rem;
 }
 
+.login-google {
+  width: 100%;
+  justify-content: center;
+  gap: 0.55rem;
+}
+
+.login-icon {
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+}
+
 .login-repo {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
   margin-top: 1rem;
   font-size: 0.85rem;
   color: var(--text-muted);

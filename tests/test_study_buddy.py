@@ -123,6 +123,55 @@ def test_me_returns_role(client):
     assert body['chat']['unlimited'] is False
 
 
+def test_guest_flashcard_subscribe_flow(client):
+    from auth import COOKIE_NAME, issue_session_token
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    upload = client.post(
+        '/documents',
+        files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
+        data={'title': 'Linear Algebra'},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()['id']
+    store = client.state_store  # type: ignore[attr-defined]
+    store[doc_id]['status'] = 'ready'
+    store[doc_id]['flashcards_open'] = False
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('guest@example.com'), path='/')
+    closed = client.post('/flashcards/subscribe', json={'document_id': doc_id})
+    assert closed.status_code == 400
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    opened = client.patch(
+        f'/documents/{doc_id}/flashcards-open',
+        json={'enabled': True},
+    )
+    assert opened.status_code == 200
+    assert opened.json()['flashcards_open'] is True
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('guest@example.com'), path='/')
+    sub = client.post('/flashcards/subscribe', json={'document_id': doc_id})
+    assert sub.status_code == 200
+
+    offers = client.get('/flashcards/offers')
+    assert offers.status_code == 200
+    assert offers.json()[0]['subscribed'] is True
+
+    unsub = client.post('/flashcards/unsubscribe', json={'document_id': doc_id})
+    assert unsub.status_code == 200
+    offers2 = client.get('/flashcards/offers')
+    assert offers2.json()[0]['subscribed'] is False
+
+
+def test_guest_cannot_open_flashcard_signup(guest_client):
+    response = guest_client.patch(
+        '/documents/doc-1/flashcards-open',
+        json={'enabled': True},
+    )
+    assert response.status_code == 403
+
+
 def test_bulk_delete_removes_documents(authenticated_client):
     for title in ('Book A', 'Book B'):
         upload = authenticated_client.post(

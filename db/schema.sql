@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS documents (
     uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     subreddits TEXT[],
     has_scan_warning BOOLEAN NOT NULL DEFAULT FALSE,
-    error_message TEXT
+    error_message TEXT,
+    flashcards_open BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS documents_uploaded_at_idx
@@ -28,3 +29,16 @@ CREATE TABLE IF NOT EXISTS chat_usage (
     day_date DATE,
     day_count INTEGER NOT NULL DEFAULT 0
 );
+
+-- Admin can open a textbook for guest flashcard signup
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS flashcards_open BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS flashcard_subscriptions (
+    email TEXT NOT NULL,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (email, document_id)
+);
+
+CREATE INDEX IF NOT EXISTS flashcard_subscriptions_document_idx
+    ON flashcard_subscriptions (document_id);
