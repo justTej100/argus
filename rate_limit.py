@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Guest chat rate limits: cooldown between messages + daily cap.
+"""Guest study rate limits: cooldown between generations + daily cap.
 
 Admins (ADMIN_EMAIL) skip limits. Guests are keyed by lowercased email.
 Persists in Postgres `chat_usage` when DATABASE_URL is set; otherwise memory.
@@ -16,7 +16,10 @@ _memory_usage: dict[str, dict[str, Any]] = {}
 
 
 def guest_cooldown_seconds() -> int:
-    raw = os.environ.get('GUEST_CHAT_COOLDOWN_SECONDS', '300').strip()
+    raw = (
+        os.environ.get('GUEST_STUDY_COOLDOWN_SECONDS')
+        or os.environ.get('GUEST_CHAT_COOLDOWN_SECONDS', '300')
+    ).strip()
     try:
         return max(0, int(raw))
     except ValueError:
@@ -24,7 +27,10 @@ def guest_cooldown_seconds() -> int:
 
 
 def guest_daily_limit() -> int:
-    raw = os.environ.get('GUEST_CHAT_DAILY_LIMIT', '10').strip()
+    raw = (
+        os.environ.get('GUEST_STUDY_DAILY_LIMIT')
+        or os.environ.get('GUEST_CHAT_DAILY_LIMIT', '10')
+    ).strip()
     try:
         return max(0, int(raw))
     except ValueError:
@@ -39,7 +45,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def get_chat_usage(email: str) -> dict[str, Any]:
+async def get_study_usage(email: str) -> dict[str, Any]:
     """Return usage row for email (normalized)."""
     key = email.strip().lower()
     today = _today_utc()
@@ -118,7 +124,7 @@ async def _save_usage(email: str, last_chat_at: datetime, day_date: date, day_co
 
 
 def usage_status(usage: dict[str, Any], *, is_admin: bool) -> dict[str, Any]:
-    """Public chat quota snapshot for GET /me."""
+    """Public study quota snapshot for GET /me."""
     cooldown = guest_cooldown_seconds()
     daily_limit = guest_daily_limit()
     if is_admin:
@@ -154,7 +160,7 @@ def usage_status(usage: dict[str, Any], *, is_admin: bool) -> dict[str, Any]:
     }
 
 
-async def check_and_record_chat(email: str, *, is_admin: bool) -> None:
+async def check_and_record_study(email: str, *, is_admin: bool) -> None:
     """Allow admins; enforce guest cooldown + daily cap; record a successful attempt."""
     if is_admin:
         return
@@ -164,14 +170,13 @@ async def check_and_record_chat(email: str, *, is_admin: bool) -> None:
 
     cooldown = guest_cooldown_seconds()
     daily_limit = guest_daily_limit()
-    usage = await get_chat_usage(email)
+    usage = await get_study_usage(email)
     today = _today_utc()
     day_count = int(usage.get('day_count') or 0)
     if usage.get('day_date') != today:
         day_count = 0
 
     last = usage.get('last_chat_at')
-    retry_after = 0
     if last is not None and cooldown > 0:
         if getattr(last, 'tzinfo', None) is None:
             last = last.replace(tzinfo=timezone.utc)
@@ -182,7 +187,10 @@ async def check_and_record_chat(email: str, *, is_admin: bool) -> None:
             raise HTTPException(
                 status_code=429,
                 detail={
-                    'message': f'Guest chat limited to one message every {cooldown // 60 or 1} minute(s). Try again in {retry_after}s.',
+                    'message': (
+                        f'Guest study limited to one generation every {cooldown // 60 or 1} minute(s). '
+                        f'Try again in {retry_after}s.'
+                    ),
                     'retry_after_seconds': retry_after,
                     'remaining_today': remaining,
                 },
@@ -192,7 +200,10 @@ async def check_and_record_chat(email: str, *, is_admin: bool) -> None:
         raise HTTPException(
             status_code=429,
             detail={
-                'message': f'Guest daily chat limit reached ({daily_limit}/day). Come back tomorrow or use an admin account.',
+                'message': (
+                    f'Guest daily study limit reached ({daily_limit}/day). '
+                    'Come back tomorrow or use an admin account.'
+                ),
                 'retry_after_seconds': 0,
                 'remaining_today': 0,
             },

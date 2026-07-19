@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Send study flashcards to the user's Gmail inbox via SMTP."""
+"""Send study packs (quiz / flashcards / summary) via Gmail SMTP."""
 
 import os
 import smtplib
@@ -100,6 +100,24 @@ def build_flashcards_plain(*, topic: str, items: list[dict]) -> str:
     return '\n'.join(lines)
 
 
+def _send_html_email(*, to_email: str, subject: str, plain: str, html: str) -> None:
+    sender, password = _smtp_settings()
+    recipient = to_email.strip()
+    if not recipient:
+        raise ValueError('Recipient email is required.')
+
+    message = MIMEMultipart('alternative')
+    message['Subject'] = subject
+    message['From'] = sender
+    message['To'] = recipient
+    message.attach(MIMEText(plain, 'plain', 'utf-8'))
+    message.attach(MIMEText(html, 'html', 'utf-8'))
+
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as smtp:
+        smtp.login(sender, password)
+        smtp.sendmail(sender, [recipient], message.as_string())
+
+
 def send_flashcards_email(
     *,
     to_email: str,
@@ -110,21 +128,91 @@ def send_flashcards_email(
     """Send a flashcard deck to the signed-in user's inbox."""
     if not items:
         raise ValueError('No flashcards to email.')
-    sender, password = _smtp_settings()
-    recipient = to_email.strip()
-    if not recipient:
-        raise ValueError('Recipient email is required.')
+    _send_html_email(
+        to_email=to_email,
+        subject=f'Argus flashcards — {topic[:80]}',
+        plain=build_flashcards_plain(topic=topic, items=items),
+        html=build_flashcards_html(topic=topic, items=items, sources=sources),
+    )
 
-    message = MIMEMultipart('alternative')
-    message['Subject'] = f'Argus flashcards — {topic[:80]}'
-    message['From'] = sender
-    message['To'] = recipient
 
-    plain = build_flashcards_plain(topic=topic, items=items)
-    html = build_flashcards_html(topic=topic, items=items, sources=sources)
-    message.attach(MIMEText(plain, 'plain', 'utf-8'))
-    message.attach(MIMEText(html, 'html', 'utf-8'))
+def build_quiz_html(*, topic: str, items: list[dict], sources: list[dict]) -> str:
+    blocks: list[str] = []
+    for index, item in enumerate(items, start=1):
+        q = escape(str(item.get('question', '')))
+        a = escape(str(item.get('answer', ''))).replace('\n', '<br>')
+        cite_html = _format_citation_links(item.get('citations') or [], sources)
+        cite_block = f'<p style="margin:8px 0 0;font-size:12px;color:#888;">{cite_html}</p>' if cite_html else ''
+        blocks.append(
+            f'<div style="margin:16px 0;padding:14px;border:1px solid #222;background:#111;">'
+            f'<p style="margin:0 0 8px;color:#888;font-size:11px;letter-spacing:0.1em;">Q{index}</p>'
+            f'<p style="margin:0 0 10px;font-weight:600;color:#f5f5f5;">{q}</p>'
+            f'<p style="margin:0;color:#ccc;">{a}</p>{cite_block}</div>'
+        )
+    return (
+        f'<html><body style="font-family:Georgia,serif;background:#000;color:#eee;padding:24px;">'
+        f'<div style="max-width:640px;margin:0 auto;">'
+        f'<p style="letter-spacing:0.2em;text-transform:uppercase;color:#666;">Argus</p>'
+        f'<h1 style="color:#fff;">Quiz: {escape(topic)}</h1>{"".join(blocks)}</div></body></html>'
+    )
 
-    with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as smtp:
-        smtp.login(sender, password)
-        smtp.sendmail(sender, [recipient], message.as_string())
+
+def build_summary_html(*, topic: str, structured: dict, sources: list[dict]) -> str:
+    title = escape(str(structured.get('title') or topic))
+    outline = structured.get('outline') or []
+    sections_html: list[str] = []
+    for sec in outline:
+        heading = escape(str(sec.get('heading', '')))
+        bullets = ''.join(f'<li>{escape(str(b))}</li>' for b in (sec.get('bullets') or []))
+        sections_html.append(f'<h3 style="color:#fff;">{heading}</h3><ul style="color:#ccc;">{bullets}</ul>')
+    cite_html = _format_citation_links(structured.get('citations') or [], sources)
+    cite_block = f'<p style="color:#888;font-size:12px;">{cite_html}</p>' if cite_html else ''
+    return (
+        f'<html><body style="font-family:Georgia,serif;background:#000;color:#eee;padding:24px;">'
+        f'<div style="max-width:640px;margin:0 auto;">'
+        f'<p style="letter-spacing:0.2em;text-transform:uppercase;color:#666;">Argus</p>'
+        f'<h1 style="color:#fff;">{title}</h1>{"".join(sections_html)}{cite_block}</div></body></html>'
+    )
+
+
+def send_study_email(
+    *,
+    to_email: str,
+    topic: str,
+    mode: str,
+    structured: dict,
+    sources: list[dict],
+) -> None:
+    """Email a generated study pack (quiz, flashcards, or summary)."""
+    if mode == 'flashcards':
+        items = structured.get('items') or []
+        send_flashcards_email(to_email=to_email, topic=topic, items=items, sources=sources)
+        return
+    if mode == 'quiz':
+        items = structured.get('items') or []
+        if not items:
+            raise ValueError('No quiz items to email.')
+        plain_lines = [f'Argus quiz — {topic}', '']
+        for i, item in enumerate(items, start=1):
+            plain_lines += [f'Q{i}: {item.get("question", "")}', f'A: {item.get("answer", "")}', '']
+        _send_html_email(
+            to_email=to_email,
+            subject=f'Argus quiz — {topic[:80]}',
+            plain='\n'.join(plain_lines),
+            html=build_quiz_html(topic=topic, items=items, sources=sources),
+        )
+        return
+    if mode == 'summary':
+        plain = f"Argus summary — {structured.get('title') or topic}\n"
+        for sec in structured.get('outline') or []:
+            plain += f"\n{sec.get('heading', '')}\n"
+            for b in sec.get('bullets') or []:
+                plain += f'- {b}\n'
+        _send_html_email(
+            to_email=to_email,
+            subject=f'Argus summary — {topic[:80]}',
+            plain=plain,
+            html=build_summary_html(topic=topic, structured=structured, sources=sources),
+        )
+        return
+    raise ValueError(f'Unsupported study email mode: {mode}')

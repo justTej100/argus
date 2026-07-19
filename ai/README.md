@@ -1,9 +1,8 @@
-# LangChain RAG layer for Argus.
-#
-# langchain_rag.py      — split PDF pages, format context for prompts
-# langchain_store.py    — PGVectorStore (argus_vectors table)
-# langchain_chain.py    — retrieve + Gemini LCEL chain
-# langchain_embeddings.py — GoogleGenerativeAIEmbeddings (3072-dim)
-# langchain_llm.py      — ChatGoogleGenerativeAI
-#
-# Legacy ai/clients.py  — direct Gemini HTTP (retries, tests)
+# AI layer for Argus
+
+- `chunking.py` — junk filter, chapter map, split PDF pages, format prompt context
+- `vector_store.py` — PGVectorStore (`argus_vectors`) with batched embed + 429 pause
+- `study_generate.py` — chapter-scoped quiz / flashcards / summary via Gemini
+- `embeddings.py` — GoogleGenerativeAIEmbeddings (3072-dim)
+- `llm.py` — ChatGoogleGenerativeAI wrapper
+- `clients.py` — direct Gemini HTTP (retries, tests)

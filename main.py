@@ -38,8 +38,8 @@ from db.subscriptions import (
     unsubscribe as unsubscribe_flashcards,
 )
 from jobs import schedule_ingestion
-from mail.gmail import EmailNotConfiguredError, send_flashcards_email
-from rate_limit import check_and_record_chat, get_chat_usage, usage_status
+from mail.gmail import EmailNotConfiguredError, send_flashcards_email, send_study_email
+from rate_limit import check_and_record_study, get_study_usage, usage_status
 from storage import delete_pdf, download_pdf, supabase_dashboard_urls, upload_pdf
 
 load_dotenv(Path(__file__).parent / '.env')
@@ -51,17 +51,27 @@ FRONTEND_DIST = Path(__file__).parent / 'frontend' / 'dist'
 async def lifespan(_app: FastAPI):
     await init_schema()
     try:
-        from ai.langchain_store import ensure_vector_table
+        from ai.vector_store import ensure_vector_table
 
         await ensure_vector_table()
     except Exception as exc:
         import logging
 
         logging.getLogger(__name__).warning('Vector table init skipped: %s', exc)
+    try:
+        from agents.FeedAgent import seed_leetcode_accounts
+        from agents.IngestionAgent import resume_paused_embeddings
+
+        await seed_leetcode_accounts()
+        await resume_paused_embeddings()
+    except Exception as exc:
+        import logging
+
+        logging.getLogger(__name__).warning('Feed/resume bootstrap skipped: %s', exc)
     yield
 
 
-app = FastAPI(title='Argus Study Buddy', version='3.0.0', lifespan=lifespan)
+app = FastAPI(title='Argus', version='4.0.0', lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -83,21 +93,11 @@ oauth.register(
 pipeline = ResearchPipeline()
 
 
-class ChatMessage(BaseModel):
-    role: Literal['user', 'assistant']
-    content: str
-
-
-class Scope(BaseModel):
-    type: Literal['document', 'library'] = 'library'
-    document_id: str | None = None
-
-
-class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
-    mode: Literal['chat', 'quiz', 'flashcards', 'summary'] = 'chat'
-    scope: Scope = Scope()
-    email_flashcards: bool = False
+class StudyRequest(BaseModel):
+    document_id: str
+    section_id: str | None = None
+    mode: Literal['quiz', 'flashcards', 'summary'] = 'quiz'
+    email: bool = False
 
 
 class FlashcardEmailRequest(BaseModel):
@@ -277,12 +277,77 @@ def logout() -> RedirectResponse:
 async def me(request: Request) -> dict:
     email = get_session_email(request) or ''
     admin = is_admin_email(email)
-    usage = await get_chat_usage(email) if email else {}
+    usage = await get_study_usage(email) if email else {}
     return {
         'email': email,
         'is_admin': admin,
-        'chat': usage_status(usage, is_admin=admin),
+        'study': usage_status(usage, is_admin=admin),
     }
+
+
+@app.get('/feed', tags=['Feed'], dependencies=[Depends(require_session)])
+async def feed(limit: int = 40, cursor: str | None = None) -> dict:
+    from db.feed import list_feed
+
+    posts = await list_feed(limit=limit, cursor=cursor)
+    return {'posts': posts}
+
+
+@app.get('/news', tags=['Feed'], dependencies=[Depends(require_session)])
+async def news() -> dict:
+    """Right-rail news: recent textbooks + embedding status."""
+    docs = await list_documents()
+    items: list[dict] = []
+    for doc in docs[:8]:
+        status = doc.get('status')
+        if status == 'ready':
+            items.append(
+                {
+                    'kind': 'ready',
+                    'title': doc.get('title'),
+                    'body': f'{doc.get("total_pages") or "?"} pages ready for the feed.',
+                    'document_id': doc['id'],
+                }
+            )
+        elif status == 'embedding_paused':
+            items.append(
+                {
+                    'kind': 'paused',
+                    'title': doc.get('title'),
+                    'body': doc.get('error_message')
+                    or f'Embedding paused ({doc.get("embed_done")}/{doc.get("embed_total")}). Resumes automatically.',
+                    'document_id': doc['id'],
+                }
+            )
+        elif status in {'processing', 'embedding'}:
+            items.append(
+                {
+                    'kind': 'processing',
+                    'title': doc.get('title'),
+                    'body': f'Embedding {doc.get("embed_done") or 0}/{doc.get("embed_total") or "?"}…',
+                    'document_id': doc['id'],
+                }
+            )
+    if not items:
+        items.append(
+            {
+                'kind': 'tip',
+                'title': 'Welcome to Argus',
+                'body': 'Upload a textbook from Library. Chapter accounts will start posting to your feed.',
+                'document_id': None,
+            }
+        )
+    return {'items': items}
+
+
+@app.get('/documents/{document_id}/sections', tags=['Documents'], dependencies=[Depends(require_session)])
+async def document_sections(document_id: str) -> list[dict]:
+    document = await get_document(document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    from db.sections import list_sections
+
+    return await list_sections(document_id)
 
 
 @app.get('/documents', tags=['Documents'], dependencies=[Depends(require_session)])
@@ -372,26 +437,49 @@ async def get_document_file(document_id: str) -> FastAPIResponse:
     return FastAPIResponse(content=blob, media_type='application/pdf')
 
 
-@app.post('/chat', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
-async def chat(request: Request, body: ChatRequest) -> StudyResponse:
-    user_messages = [m for m in body.messages if m.role == 'user']
-    if not user_messages:
-        raise HTTPException(status_code=400, detail='At least one user message is required.')
-
+@app.post('/study', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
+async def study(request: Request, body: StudyRequest) -> StudyResponse:
     email = get_session_email(request) or ''
-    await check_and_record_chat(email, is_admin=is_admin_email(email))
+    await check_and_record_study(email, is_admin=is_admin_email(email))
 
-    query = user_messages[-1].content
-    history = [{'role': m.role, 'content': m.content} for m in body.messages[:-1]] or None
-    scope = body.scope.model_dump()
+    document = await get_document(body.document_id)
+    if not document:
+        raise HTTPException(status_code=404, detail='Document not found.')
+    if document.get('status') != 'ready':
+        raise HTTPException(status_code=400, detail='Textbook is not ready yet. Wait for embedding to finish.')
+
+    from db.sections import get_section, list_sections
+
+    start_page: int | None = None
+    end_page: int | None = None
+    chapter_title = ''
+    section_id = body.section_id
+
+    if section_id:
+        section = await get_section(section_id)
+        if not section or section.get('document_id') != body.document_id:
+            raise HTTPException(status_code=404, detail='Section not found.')
+        start_page = int(section['start_page'])
+        end_page = int(section['end_page'])
+        chapter_title = str(section['title'])
+    else:
+        sections = await list_sections(body.document_id)
+        if sections:
+            raise HTTPException(status_code=400, detail='Choose a chapter/section for this textbook.')
+        chapter_title = str(document.get('title') or 'Textbook')
+
+    query = chapter_title or document.get('title') or 'Study this chapter'
 
     try:
         result = await pipeline.run(
             query=query,
             query_type='study',
-            conversation_history=history,
-            scope=scope,
+            document_id=body.document_id,
             mode=body.mode,
+            start_page=start_page,
+            end_page=end_page,
+            chapter_title=chapter_title,
+            section_id=section_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -408,29 +496,24 @@ async def chat(request: Request, body: ChatRequest) -> StudyResponse:
         meta=result.meta,
         structured=result.structured,
     )
-    await _maybe_email_flashcards(request, body, study_response)
+
+    if body.email and study_response.structured:
+        recipient = get_session_email(request)
+        if recipient:
+            try:
+                send_study_email(
+                    to_email=recipient,
+                    topic=chapter_title,
+                    mode=body.mode,
+                    structured=study_response.structured,
+                    sources=study_response.sources,
+                )
+            except EmailNotConfiguredError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+            except ValueError:
+                pass
+
     return study_response
-
-
-async def _maybe_email_flashcards(request: Request, body: ChatRequest, result: StudyResponse) -> None:
-    if body.mode != 'flashcards' or not body.email_flashcards:
-        return
-    items = (result.structured or {}).get('items', [])
-    if not items:
-        return
-    recipient = get_session_email(request)
-    if not recipient:
-        return
-    topic = body.messages[-1].content if body.messages else 'Study topic'
-    try:
-        send_flashcards_email(to_email=recipient, topic=topic, items=items, sources=result.sources)
-    except (EmailNotConfiguredError, ValueError):
-        return
-
-
-@app.post('/search', response_model=StudyResponse, tags=['Study'], dependencies=[Depends(require_session)])
-async def search(request: Request, body: ChatRequest) -> StudyResponse:
-    return await chat(request, body)
 
 
 @app.get('/admin/config', tags=['Admin'], dependencies=[Depends(require_admin)])
@@ -444,7 +527,7 @@ async def admin_config() -> dict:
 
 @app.get('/admin/stats', tags=['Admin'], dependencies=[Depends(require_admin)])
 async def admin_stats() -> dict:
-    from ai.langchain_store import count_vectors, count_vectors_for_document
+    from ai.vector_store import count_vectors, count_vectors_for_document
 
     docs = await list_documents()
     total_vectors = await count_vectors()
@@ -470,7 +553,7 @@ async def admin_stats() -> dict:
 
 @app.get('/admin/documents/{document_id}/chunks', tags=['Admin'], dependencies=[Depends(require_admin)])
 async def admin_document_chunks(document_id: str, limit: int = 5) -> dict:
-    from ai.langchain_store import sample_vectors
+    from ai.vector_store import sample_vectors
 
     document = await get_document(document_id)
     if not document:
@@ -501,6 +584,11 @@ async def spa_login() -> FileResponse:
 
 @app.get('/study')
 async def spa_study() -> FileResponse:
+    return _spa_index()
+
+
+@app.get('/library')
+async def spa_library() -> FileResponse:
     return _spa_index()
 
 

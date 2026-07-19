@@ -1,6 +1,6 @@
 .PHONY: help run app backend install venv stop test frontend frontend-dev
 
-APP_PORT := 8008
+APP_PORT := 8000
 APP_URL := http://localhost:$(APP_PORT)
 
 VENV := .venv

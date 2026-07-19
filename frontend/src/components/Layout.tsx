@@ -1,41 +1,58 @@
 import { NavLink } from 'react-router-dom';
 import { MeProvider, useMe } from '../me';
 
-function NavBar() {
+function LeftRail() {
   const me = useMe();
 
   return (
-    <nav className="nav">
-      <span className="nav-brand">ARGUS</span>
-      <div className="nav-links">
-        <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
+    <aside className="rail rail-left">
+      <div className="brand-block">
+        <span className="brand-mark">ARGUS</span>
+        <span className="brand-tag">textbook social</span>
+      </div>
+      <nav className="rail-nav">
+        <NavLink to="/" end className={({ isActive }) => (isActive ? 'rail-link active' : 'rail-link')}>
+          Home
+        </NavLink>
+        <NavLink to="/library" className={({ isActive }) => (isActive ? 'rail-link active' : 'rail-link')}>
           Library
         </NavLink>
-        <NavLink to="/study" className={({ isActive }) => (isActive ? 'active' : '')}>
+        <NavLink to="/study" className={({ isActive }) => (isActive ? 'rail-link active' : 'rail-link')}>
           Study
         </NavLink>
         {me?.is_admin && (
-          <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+          <NavLink to="/admin" className={({ isActive }) => (isActive ? 'rail-link active' : 'rail-link')}>
             Database
           </NavLink>
         )}
+      </nav>
+      <div className="rail-foot">
         {me && (
-          <span className="nav-user" title={me.email}>
-            {me.is_admin ? me.email : 'Guest (rate limited)'}
-          </span>
+          <p className="rail-user" title={me.email}>
+            {me.is_admin ? me.email : 'Guest'}
+          </p>
         )}
-        <a href="/logout">Logout</a>
+        <a href="/logout" className="rail-link subtle">
+          Log out
+        </a>
       </div>
-    </nav>
+    </aside>
   );
 }
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+export default function Layout({
+  children,
+  right,
+}: {
+  children: React.ReactNode;
+  right?: React.ReactNode;
+}) {
   return (
     <MeProvider>
-      <div className="app-shell">
-        <NavBar />
-        <main className="main">{children}</main>
+      <div className="shell">
+        <LeftRail />
+        <main className="center-col">{children}</main>
+        <aside className="rail rail-right">{right}</aside>
       </div>
     </MeProvider>
   );

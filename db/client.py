@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Async Postgres helpers for the `documents` table (metadata only).
 
-Vector chunks live in `argus_vectors` (managed by ai.langchain_store).
+Vector chunks live in `argus_vectors` (managed by ai.vector_store).
 When DATABASE_URL is unset or unreachable, uses an in-memory dict.
 """
 
@@ -62,6 +62,32 @@ async def init_schema() -> None:
         logger.error('init_schema failed: %s', exc)
 
 
+def _blank_doc(
+    document_id: str,
+    title: str,
+    description: str | None,
+    status: str,
+    total_pages: int,
+    storage_path: str,
+) -> dict[str, Any]:
+    return {
+        'id': document_id,
+        'title': title,
+        'description': description,
+        'status': status,
+        'total_pages': total_pages,
+        'storage_path': storage_path,
+        'uploaded_at': time.time(),
+        'has_scan_warning': False,
+        'error_message': None,
+        'flashcards_open': False,
+        'embed_total': 0,
+        'embed_done': 0,
+        'embed_resume_at': None,
+        'chunks_skipped': 0,
+    }
+
+
 async def create_document(
     title: str,
     description: str | None,
@@ -73,18 +99,9 @@ async def create_document(
     pool = await get_pool()
     if pool is None:
         document_id = str(uuid.uuid4())
-        _memory_documents[document_id] = {
-            'id': document_id,
-            'title': title,
-            'description': description,
-            'status': status,
-            'total_pages': total_pages,
-            'storage_path': storage_path,
-            'uploaded_at': time.time(),
-            'has_scan_warning': False,
-            'error_message': None,
-            'flashcards_open': False,
-        }
+        _memory_documents[document_id] = _blank_doc(
+            document_id, title, description, status, total_pages, storage_path
+        )
         return document_id
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -109,8 +126,14 @@ async def update_document_status(
     has_scan_warning: bool | None = None,
     error_message: str | None = None,
     storage_path: str | None = None,
+    embed_done: int | None = None,
+    embed_total: int | None = None,
+    embed_resume_at: Any = None,
+    chunks_skipped: int | None = None,
 ) -> None:
     """Update document status and optional metadata fields."""
+    clear_resume = status in {'ready', 'processing', 'embedding', 'error'} and embed_resume_at is None
+
     pool = await get_pool()
     if pool is None:
         document = _memory_documents.get(document_id)
@@ -125,32 +148,57 @@ async def update_document_status(
             document['error_message'] = error_message
         if storage_path is not None:
             document['storage_path'] = storage_path
+        if embed_done is not None:
+            document['embed_done'] = embed_done
+        if embed_total is not None:
+            document['embed_total'] = embed_total
+        if chunks_skipped is not None:
+            document['chunks_skipped'] = chunks_skipped
+        if clear_resume:
+            document['embed_resume_at'] = None
+        elif embed_resume_at is not None:
+            document['embed_resume_at'] = embed_resume_at
         return
+
     updates: list[str] = ['status = $2']
     params: list[Any] = [document_id, status]
     idx = 3
-    if total_pages is not None:
-        updates.append(f'total_pages = ${idx}')
-        params.append(total_pages)
-        idx += 1
-    if has_scan_warning is not None:
-        updates.append(f'has_scan_warning = ${idx}')
-        params.append(has_scan_warning)
-        idx += 1
-    if error_message is not None:
-        updates.append(f'error_message = ${idx}')
-        params.append(error_message)
-        idx += 1
-    if storage_path is not None:
-        updates.append(f'storage_path = ${idx}')
-        params.append(storage_path)
+    for col, val in (
+        ('total_pages', total_pages),
+        ('has_scan_warning', has_scan_warning),
+        ('error_message', error_message),
+        ('storage_path', storage_path),
+        ('embed_done', embed_done),
+        ('embed_total', embed_total),
+        ('chunks_skipped', chunks_skipped),
+    ):
+        if val is not None:
+            updates.append(f'{col} = ${idx}')
+            params.append(val)
+            idx += 1
 
-    pool = await get_pool()
+    if clear_resume:
+        updates.append(f'embed_resume_at = ${idx}')
+        params.append(None)
+        idx += 1
+    elif embed_resume_at is not None:
+        updates.append(f'embed_resume_at = ${idx}')
+        params.append(embed_resume_at)
+        idx += 1
+
     async with pool.acquire() as conn:
         await conn.execute(
             f"UPDATE documents SET {', '.join(updates)} WHERE id = $1::uuid",
             *params,
         )
+
+
+_DOC_SELECT = """
+    SELECT id::text, title, description, status, total_pages, storage_path,
+           uploaded_at, has_scan_warning, error_message, flashcards_open,
+           embed_total, embed_done, embed_resume_at, chunks_skipped
+    FROM documents
+"""
 
 
 async def get_document(document_id: str) -> dict | None:
@@ -159,15 +207,7 @@ async def get_document(document_id: str) -> dict | None:
     if pool is None:
         return _memory_documents.get(document_id)
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT id::text, title, description, status, total_pages, storage_path,
-                   uploaded_at, has_scan_warning, error_message, flashcards_open
-            FROM documents
-            WHERE id = $1::uuid
-            """,
-            document_id,
-        )
+        row = await conn.fetchrow(_DOC_SELECT + ' WHERE id = $1::uuid', document_id)
     if not row:
         return None
     return dict(row)
@@ -180,23 +220,20 @@ async def list_documents() -> list[dict]:
         documents = list(_memory_documents.values())
         return sorted(documents, key=lambda document: document.get('uploaded_at', 0), reverse=True)
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id::text, title, description, status, total_pages, storage_path,
-                   uploaded_at, has_scan_warning, error_message, flashcards_open
-            FROM documents
-            ORDER BY uploaded_at DESC
-            """
-        )
+        rows = await conn.fetch(_DOC_SELECT + ' ORDER BY uploaded_at DESC')
     return [dict(r) for r in rows]
 
 
 async def delete_document(document_id: str) -> None:
-    """Delete one document and its vectors."""
-    from ai.langchain_store import delete_document_vectors
+    """Delete one document and its vectors / sections / feed posts."""
+    from ai.vector_store import delete_document_vectors
+    from db.feed import delete_posts_for_document
+    from db.sections import delete_sections_for_document
     from db.subscriptions import delete_subscriptions_for_document
 
     await delete_document_vectors(document_id)
+    await delete_posts_for_document(document_id)
+    await delete_sections_for_document(document_id)
     await delete_subscriptions_for_document(document_id)
     pool = await get_pool()
     if pool is None:
@@ -225,8 +262,15 @@ async def get_scope_document_ids(scope: dict | None) -> list[str]:
             document_id = scope.get('document_id')
             if not document_id:
                 return []
-            row = await conn.fetchrow('SELECT id::text FROM documents WHERE id = $1::uuid AND status = $2', document_id, 'ready')
+            row = await conn.fetchrow(
+                'SELECT id::text FROM documents WHERE id = $1::uuid AND status = $2',
+                document_id,
+                'ready',
+            )
             return [row['id']] if row else []
 
-        rows = await conn.fetch('SELECT id::text FROM documents WHERE status = $1 ORDER BY uploaded_at DESC', 'ready')
+        rows = await conn.fetch(
+            'SELECT id::text FROM documents WHERE status = $1 ORDER BY uploaded_at DESC',
+            'ready',
+        )
         return [r['id'] for r in rows]

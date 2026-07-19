@@ -8,8 +8,9 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:8000',
       '/documents': 'http://localhost:8000',
-      '/chat': 'http://localhost:8000',
-      '/search': 'http://localhost:8000',
+      '/study': 'http://localhost:8000',
+      '/feed': 'http://localhost:8000',
+      '/news': 'http://localhost:8000',
       '/flashcards': 'http://localhost:8000',
       '/logout': 'http://localhost:8000',
       '/health': 'http://localhost:8000',

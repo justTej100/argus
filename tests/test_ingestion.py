@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from agents.IngestionAgent import build_document_chunks, extract_pages_from_pdf
-from ai.langchain_rag import split_pages_to_chunks
+from ai.chunking import split_pages_to_chunks
 
 
 def test_split_pages_preserves_metadata() -> None:
-    chunks = split_pages_to_chunks(
-        [(1, 'Introduction to linear algebra. Vectors and matrices.'), (2, 'Eigenvalues and eigenvectors.')],
+    chunks, _skipped = split_pages_to_chunks(
+        [
+            (1, 'Introduction to linear algebra. Vectors and matrices. ' * 20),
+            (2, 'Eigenvalues and eigenvectors. ' * 20),
+        ],
         document_id='doc-1',
         title='Linear Algebra',
         description='MATH 240',
+        total_pages=2,
     )
     assert chunks
     assert chunks[0]['page_number'] == 1
@@ -17,12 +20,13 @@ def test_split_pages_preserves_metadata() -> None:
     assert chunks[0]['metadata']['title'] == 'Linear Algebra'
 
 
-def test_build_document_chunks_marks_scan_warning_for_empty_pages() -> None:
-    chunks, has_scan_warning = build_document_chunks(
-        [(1, 'A short page.'), (2, '')],
+def test_empty_pages_are_skipped() -> None:
+    chunks, skipped = split_pages_to_chunks(
+        [(1, 'A substantial page of textbook content about vectors. ' * 20), (2, '')],
         document_id='doc-1',
         title='Sample',
+        total_pages=2,
     )
     assert chunks
-    assert chunks[0]['metadata']['page'] == 1
-    assert has_scan_warning is True
+    assert all(c['page_number'] == 1 for c in chunks)
+    assert skipped >= 1

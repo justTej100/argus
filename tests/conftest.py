@@ -20,8 +20,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     os.environ['SECRET_KEY'] = 'test-secret-key'
     os.environ['ADMIN_EMAIL'] = 'admin@test.com'
     os.environ.pop('DATABASE_URL', None)
-    os.environ['GUEST_CHAT_COOLDOWN_SECONDS'] = '300'
-    os.environ['GUEST_CHAT_DAILY_LIMIT'] = '10'
+    os.environ['GUEST_STUDY_COOLDOWN_SECONDS'] = '300'
+    os.environ['GUEST_STUDY_DAILY_LIMIT'] = '10'
 
     project_root = Path(__file__).resolve().parents[1]
     if str(project_root) not in sys.path:
@@ -32,6 +32,13 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     reset_memory_usage()
 
     import main  # type: ignore
+
+    # main.load_dotenv() may rehydrate DATABASE_URL from .env — keep tests in-memory.
+    os.environ.pop('DATABASE_URL', None)
+    import db.client as db_client
+
+    db_client._pool = None
+    db_client._pool_failed = False
 
     state: dict[str, dict] = {}
 
@@ -122,8 +129,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
                 citation_errors=[],
             ),
             sources=[{'document_id': 'doc-1', 'page_number': 1, 'sentence_start_idx': 0, 'sentence_end_idx': 1, 'text': 'abc', 'document_title': 'Book', 'source_type': 'textbook'}],
-            meta={'mode': 'chat', 'provider': 'gemini'},
-            structured=None,
+            meta={'mode': 'quiz', 'provider': 'gemini'},
+            structured={'items': [{'question': 'Q?', 'answer': 'A', 'citations': ['[p1]']}]},
         )
 
     async def fake_run(**_kwargs):
@@ -135,12 +142,20 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     async def noop_ensure_vector_table() -> None:
         return None
 
+    async def noop_seed() -> None:
+        return None
+
+    async def noop_resume() -> int:
+        return 0
+
     monkeypatch.setattr(main.pipeline, 'run', fake_run)
     monkeypatch.setattr(main, 'init_schema', noop_init_schema)
 
-    import ai.langchain_store as lc_store
+    import ai.vector_store as vector_store
 
-    monkeypatch.setattr(lc_store, 'ensure_vector_table', noop_ensure_vector_table)
+    monkeypatch.setattr(vector_store, 'ensure_vector_table', noop_ensure_vector_table)
+    monkeypatch.setattr('agents.FeedAgent.seed_leetcode_accounts', noop_seed)
+    monkeypatch.setattr('agents.IngestionAgent.resume_paused_embeddings', noop_resume)
 
     app_client = TestClient(main.app)
     app_client.state_store = state  # type: ignore[attr-defined]

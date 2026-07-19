@@ -3,14 +3,24 @@ from __future__ import annotations
 """Smoke tests for the highest-value request paths."""
 
 
+def _ready_doc(client, title: str = 'Linear Algebra') -> str:
+    upload = client.post(
+        '/documents',
+        files={'file': ('book.pdf', b'%PDF-1.4 test', 'application/pdf')},
+        data={'title': title, 'description': 'Intro'},
+    )
+    assert upload.status_code == 200
+    doc_id = upload.json()['id']
+    store = client.state_store  # type: ignore[attr-defined]
+    store[doc_id]['status'] = 'ready'
+    return doc_id
+
+
 def test_logout_clears_session(authenticated_client):
+    doc_id = _ready_doc(authenticated_client)
     response = authenticated_client.post(
-        '/chat',
-        json={
-            'messages': [{'role': 'user', 'content': 'hello'}],
-            'mode': 'chat',
-            'scope': {'type': 'library'},
-        },
+        '/study',
+        json={'document_id': doc_id, 'mode': 'quiz', 'email': False},
     )
     assert response.status_code == 200
 
@@ -18,28 +28,19 @@ def test_logout_clears_session(authenticated_client):
     assert logout.status_code == 302
     set_cookie = logout.headers.get('set-cookie', '')
     assert 'Max-Age=0' in set_cookie
-    # TestClient keeps deleted cookies in its jar unless removed explicitly.
     authenticated_client.cookies.delete('argus_session', path='/')
 
     blocked = authenticated_client.post(
-        '/chat',
-        json={
-            'messages': [{'role': 'user', 'content': 'hello'}],
-            'mode': 'chat',
-            'scope': {'type': 'library'},
-        },
+        '/study',
+        json={'document_id': doc_id, 'mode': 'quiz'},
     )
     assert blocked.status_code == 401
 
 
-def test_chat_requires_session(client):
+def test_study_requires_session(client):
     response = client.post(
-        '/chat',
-        json={
-            'messages': [{'role': 'user', 'content': 'hello'}],
-            'mode': 'chat',
-            'scope': {'type': 'library'},
-        },
+        '/study',
+        json={'document_id': 'doc-1', 'mode': 'quiz'},
     )
     assert response.status_code == 401
 
@@ -83,25 +84,19 @@ def test_guest_upload_forbidden(guest_client):
     assert upload.status_code == 403
 
 
-def test_guest_chat_rate_limited(guest_client):
-    first = guest_client.post(
-        '/chat',
-        json={
-            'messages': [{'role': 'user', 'content': 'hello'}],
-            'mode': 'chat',
-            'scope': {'type': 'library'},
-        },
-    )
+def test_guest_study_rate_limited(client):
+    from auth import COOKIE_NAME, issue_session_token
+    from rate_limit import reset_memory_usage
+
+    reset_memory_usage()
+    client.cookies.set(COOKIE_NAME, issue_session_token('admin@test.com'), path='/')
+    doc_id = _ready_doc(client)
+
+    client.cookies.set(COOKIE_NAME, issue_session_token('guest@example.com'), path='/')
+    first = client.post('/study', json={'document_id': doc_id, 'mode': 'summary'})
     assert first.status_code == 200
 
-    second = guest_client.post(
-        '/chat',
-        json={
-            'messages': [{'role': 'user', 'content': 'again'}],
-            'mode': 'chat',
-            'scope': {'type': 'library'},
-        },
-    )
+    second = client.post('/study', json={'document_id': doc_id, 'mode': 'quiz'})
     assert second.status_code == 429
     detail = second.json()['detail']
     assert detail['retry_after_seconds'] > 0
@@ -120,7 +115,17 @@ def test_me_returns_role(client):
     assert guest_me.status_code == 200
     body = guest_me.json()
     assert body['is_admin'] is False
-    assert body['chat']['unlimited'] is False
+    assert body['study']['unlimited'] is False
+
+
+def test_feed_requires_session(client):
+    assert client.get('/feed').status_code == 401
+
+
+def test_feed_ok_when_authed(authenticated_client):
+    response = authenticated_client.get('/feed')
+    assert response.status_code == 200
+    assert 'posts' in response.json()
 
 
 def test_guest_flashcard_subscribe_flow(client):

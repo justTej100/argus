@@ -18,8 +18,12 @@ import type { Document, FlashcardOffer } from '../types';
 
 function StatusBadge({ status }: { status: string }) {
   const cls =
-    status === 'ready' ? 'status-ready' : status === 'error' ? 'status-error' : 'status-processing';
-  return <span className={`status ${cls}`}>{status}</span>;
+    status === 'ready'
+      ? 'status-ready'
+      : status === 'error'
+        ? 'status-error'
+        : 'status-processing';
+  return <span className={`status ${cls}`}>{status.replace(/_/g, ' ')}</span>;
 }
 
 type DeleteTarget = { ids: string[]; titles: string[]; label: string };
@@ -232,7 +236,9 @@ export default function LibraryPage() {
 
       <h1 className="page-title">Library</h1>
       <p className="page-sub">
-        {isAdmin ? 'Upload PDFs · embeddings build automatically' : 'Browse textbooks and open Study to chat (guest rate limits apply)'}
+        {isAdmin
+          ? 'Upload PDFs · junk filtered · chapters mapped · embeddings resume after rate limits'
+          : 'Browse textbooks · Study chapter packs (guest rate limits apply)'}
       </p>
 
       {isAdmin && (

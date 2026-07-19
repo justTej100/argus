@@ -1,219 +1,98 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { chat, broadcastFlashcards, emailFlashcards, extractPages } from '../api';
-import AnswerBlock from '../components/AnswerBlock';
+import { useEffect, useMemo, useState } from 'react';
+import { extractPages, listDocuments, listSections, study } from '../api';
 import PdfViewer from '../components/PdfViewer';
 import { useMe } from '../me';
-import type { ChatMessage, Document, Source, StudyMode } from '../types';
+import type { Document, DocumentSection, Source, StudyMode } from '../types';
 
 type FlashcardItem = { front: string; back: string; citations?: string[] };
 type QuizItem = { question: string; answer: string; citations?: string[] };
 
 export default function StudyPage() {
   const me = useMe();
-  const [searchParams] = useSearchParams();
-  const initialDoc = searchParams.get('document') || '';
-
   const [docs, setDocs] = useState<Document[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [prompt, setPrompt] = useState('');
-  const [mode, setMode] = useState<StudyMode>('chat');
-  const [scopeType, setScopeType] = useState<'library' | 'document'>(
-    initialDoc ? 'document' : 'library',
-  );
-  const [docId, setDocId] = useState(initialDoc);
-  const [emailFlashcardsFlag, setEmailFlashcardsFlag] = useState(false);
+  const [docId, setDocId] = useState('');
+  const [sections, setSections] = useState<DocumentSection[]>([]);
+  const [sectionId, setSectionId] = useState('');
+  const [mode, setMode] = useState<StudyMode>('quiz');
+  const [emailMe, setEmailMe] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [sources, setSources] = useState<Source[]>([]);
-  const [lastFlashcards, setLastFlashcards] = useState<FlashcardItem[] | null>(null);
-  const [lastTopic, setLastTopic] = useState('');
-  const [pdfDocId, setPdfDocId] = useState<string | null>(initialDoc || null);
-  const [pdfPage, setPdfPage] = useState(1);
   const [structured, setStructured] = useState<Record<string, unknown> | null>(null);
+  const [sources, setSources] = useState<Source[]>([]);
   const [citationErrors, setCitationErrors] = useState<string[]>([]);
-  const threadRef = useRef<HTMLDivElement>(null);
+  const [pdfDocId, setPdfDocId] = useState<string | null>(null);
+  const [pdfPage, setPdfPage] = useState(1);
 
   const readyDocs = useMemo(() => docs.filter((d) => d.status === 'ready'), [docs]);
 
   useEffect(() => {
-    import('../api').then(({ listDocuments }) => listDocuments().then(setDocs));
+    listDocuments().then(setDocs).catch(() => setDocs([]));
   }, []);
 
   useEffect(() => {
-    if (scopeType === 'document' && docId) {
-      setPdfDocId(docId);
-      setPdfPage(1);
+    if (!docId) {
+      setSections([]);
+      setSectionId('');
+      return;
     }
-  }, [scopeType, docId]);
+    listSections(docId)
+      .then((secs) => {
+        setSections(secs);
+        setSectionId(secs[0]?.id || '');
+      })
+      .catch(() => {
+        setSections([]);
+        setSectionId('');
+      });
+  }, [docId]);
 
-  const openPdf = useCallback((documentId: string, page: number) => {
-    setPdfDocId(documentId);
-    setPdfPage(page);
-  }, []);
-
-  const scrollThread = () => {
-    requestAnimationFrame(() => {
-      if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-    });
-  };
-
-  const submit = async (e?: FormEvent) => {
-    e?.preventDefault();
-    const question = prompt.trim();
-    if (!question || busy) return;
-
-    setError('');
+  const generate = async () => {
+    if (!docId || busy) return;
+    if (sections.length && !sectionId) {
+      setError('Pick a chapter/section.');
+      return;
+    }
     setBusy(true);
-    setPrompt('');
+    setError('');
     setStructured(null);
-
-    const userMsg: ChatMessage = { role: 'user', content: question };
-    if (mode === 'chat') {
-      setMessages((m) => [...m, userMsg]);
-    }
-    scrollThread();
-
-    const scope =
-      scopeType === 'document'
-        ? { type: 'document' as const, document_id: docId }
-        : { type: 'library' as const };
-
-    const payload =
-      mode === 'chat' ? [...messages, userMsg] : [userMsg];
-
     try {
-      const result = await chat(payload, mode, scope, emailFlashcardsFlag && mode === 'flashcards');
+      const result = await study(docId, mode, sectionId || null, emailMe);
+      setStructured(result.structured || null);
       setSources(result.sources);
       setCitationErrors(result.eval?.citation_errors || []);
-
       if (result.sources[0]) {
-        openPdf(
-          result.sources[0].document_id,
-          result.sources[0].page_number || 1,
-        );
+        setPdfDocId(result.sources[0].document_id);
+        setPdfPage(result.sources[0].page_number || 1);
       }
-
-      if (mode === 'chat') {
-        setMessages((m) => [...m, { role: 'assistant', content: result.brief }]);
-      } else {
-        setStructured(result.structured || null);
-        if (mode === 'flashcards') {
-          const items = (result.structured?.items as FlashcardItem[]) || [];
-          setLastFlashcards(items);
-          setLastTopic(question);
-        }
-      }
-      scrollThread();
     } catch (err) {
-      if (mode === 'chat') {
-        setMessages((m) => m.slice(0, -1));
-      }
-      setError(err instanceof Error ? err.message : 'Request failed');
+      setError(err instanceof Error ? err.message : 'Generation failed');
     } finally {
       setBusy(false);
     }
   };
 
-  const handleEmailFlashcards = async () => {
-    if (!lastFlashcards?.length) return;
-    try {
-      await emailFlashcards(lastTopic, lastFlashcards, sources);
-      setError('');
-      alert('Flashcards sent to your Gmail.');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Email failed');
+  const openPage = (page: number) => {
+    if (sources[0]) {
+      setPdfDocId(sources[0].document_id);
+      setPdfPage(page);
     }
-  };
-
-  const handleBroadcastFlashcards = async () => {
-    if (!lastFlashcards?.length || !docId || scopeType !== 'document') return;
-    try {
-      const result = await broadcastFlashcards(docId, lastTopic, lastFlashcards, sources);
-      setError('');
-      alert(`Sent to ${result.sent} subscriber(s)${result.failed ? ` (${result.failed} failed)` : ''}.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Broadcast failed');
-    }
-  };
-
-  const renderAssistantContent = () => {
-    if (mode === 'chat' && messages.length) {
-      const last = [...messages].reverse().find((m) => m.role === 'assistant');
-      if (!last) return null;
-      return (
-        <AnswerBlock
-          text={last.content}
-          sources={sources}
-          onOpenPage={openPdf}
-          citationErrors={citationErrors}
-        />
-      );
-    }
-
-    if (mode === 'quiz' && structured?.items) {
-      return (structured.items as QuizItem[]).map((item, i) => (
-        <div key={i} className="flashcard">
-          <div className="flashcard-front">{item.question}</div>
-          <div className="flashcard-back">{item.answer}</div>
-          {extractPages((item.citations || []).join(' ')).map((p) => (
-            <button key={p} type="button" className="cite-chip" onClick={() => sources[0] && openPdf(sources[0].document_id, p)}>
-              p{p}
-            </button>
-          ))}
-        </div>
-      ));
-    }
-
-    if (mode === 'flashcards' && structured?.items) {
-      return (structured.items as FlashcardItem[]).map((item, i) => (
-        <div key={i} className="flashcard">
-          <div className="flashcard-front">{item.front}</div>
-          <div className="flashcard-back">{item.back}</div>
-        </div>
-      ));
-    }
-
-    if (mode === 'summary' && structured) {
-      const outline = (structured.outline as { heading: string; bullets: string[] }[]) || [];
-      return (
-        <div>
-          <h3>{String(structured.title || 'Summary')}</h3>
-          {outline.map((sec, i) => (
-            <div key={i}>
-              <h4>{sec.heading}</h4>
-              <ul>
-                {sec.bullets?.map((b, j) => (
-                  <li key={j}>{b}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    return null;
   };
 
   return (
-    <div>
-      <h1 className="page-title">Study</h1>
-      <p className="page-sub">
-        {readyDocs.length
-          ? `${readyDocs.length} textbook(s) ready`
-          : 'Upload a textbook on the Library page first.'}
-        {me && !me.is_admin && me.chat.remaining_today != null
-          ? ` · Guest: ${me.chat.remaining_today}/${me.chat.daily_limit} chats left today`
-          : ''}
-      </p>
+    <div className="study-page">
+      <header className="feed-header">
+        <h1>Study</h1>
+        <p className="feed-sub">
+          Pick a textbook chapter. Generate quiz, flashcards, or a summary — view here or email the pack.
+          {me && !me.is_admin && me.study.remaining_today != null
+            ? ` · Guest: ${me.study.remaining_today}/${me.study.daily_limit} left today`
+            : ''}
+        </p>
+      </header>
 
-      <div className="scope-row">
-        <select value={scopeType} onChange={(e) => setScopeType(e.target.value as typeof scopeType)}>
-          <option value="library">All textbooks</option>
-          <option value="document">One textbook</option>
-        </select>
-        {scopeType === 'document' && (
+      <div className="study-controls">
+        <label className="field-inline">
+          <span>Textbook</span>
           <select value={docId} onChange={(e) => setDocId(e.target.value)}>
             <option value="">Select textbook</option>
             {readyDocs.map((d) => (
@@ -222,135 +101,113 @@ export default function StudyPage() {
               </option>
             ))}
           </select>
-        )}
-        <select value={mode} onChange={(e) => setMode(e.target.value as StudyMode)}>
-          <option value="chat">Tutor chat</option>
-          <option value="quiz">Quiz</option>
-          <option value="flashcards">Flashcards</option>
-          <option value="summary">Summary</option>
-        </select>
-        {mode === 'flashcards' && (
-          <label style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-            <input type="checkbox" checked={emailFlashcardsFlag} onChange={(e) => setEmailFlashcardsFlag(e.target.checked)} />
-            Email me
-          </label>
-        )}
-        {mode === 'flashcards' && me?.is_admin && (
-          <span className="doc-meta">Tip: open signup on Library, then use “Send to subscribers” for one textbook.</span>
-        )}
+        </label>
+        <label className="field-inline">
+          <span>Chapter / section</span>
+          <select
+            value={sectionId}
+            onChange={(e) => setSectionId(e.target.value)}
+            disabled={!sections.length}
+          >
+            {!sections.length && <option value="">Whole book (no sections yet)</option>}
+            {sections.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title} (p{s.start_page}–{s.end_page})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field-inline">
+          <span>Material</span>
+          <select value={mode} onChange={(e) => setMode(e.target.value as StudyMode)}>
+            <option value="quiz">Quiz</option>
+            <option value="flashcards">Flashcards</option>
+            <option value="summary">Summary</option>
+          </select>
+        </label>
+        <label className="check-inline">
+          <input type="checkbox" checked={emailMe} onChange={(e) => setEmailMe(e.target.checked)} />
+          Email me
+        </label>
+        <button type="button" className="btn btn-accent" disabled={!docId || busy} onClick={generate}>
+          {busy ? 'Generating…' : 'Generate'}
+        </button>
       </div>
 
-      <div className="study-grid">
-        <div className="study-col">
-          <p className="section-label">Conversation</p>
-          <div className="panel thread" ref={threadRef}>
-            {messages.length === 0 && mode === 'chat' && (
-              <p className="empty">Ask a question about your textbook.</p>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`bubble ${m.role === 'user' ? 'bubble-user' : 'bubble-assistant'}`}>
-                <div className="bubble-label">{m.role === 'user' ? 'You' : 'Argus'}</div>
-                {m.role === 'user' ? (
-                  m.content
-                ) : (
-                  <AnswerBlock text={m.content} sources={sources} onOpenPage={openPdf} citationErrors={citationErrors} />
-                )}
+      {error && <p className="error-banner">{error}</p>}
+      {citationErrors.length > 0 && (
+        <p className="warn-banner">Citation warnings: {citationErrors.join('; ')}</p>
+      )}
+
+      <div className="study-results">
+        {mode === 'quiz' && Array.isArray(structured?.items) ? (
+          <div className="material-list">
+            {(structured!.items as QuizItem[]).map((item, i) => (
+              <div key={i} className="material-card">
+                <p className="material-q">{item.question}</p>
+                <p className="material-a">{item.answer}</p>
+                <div className="cite-row">
+                  {extractPages((item.citations || []).join(' ')).map((p) => (
+                    <button key={p} type="button" className="post-chip" onClick={() => openPage(p)}>
+                      p{p}
+                    </button>
+                  ))}
+                </div>
               </div>
             ))}
-            {busy && (
-              <div className="bubble bubble-assistant">
-                <div className="bubble-label">Argus</div>
-                <p className="loading">Reading your textbook…</p>
-              </div>
-            )}
-            {mode !== 'chat' && structured && (
-              <div className="bubble bubble-assistant">
-                <div className="bubble-label">Argus</div>
-                {renderAssistantContent()}
-              </div>
-            )}
           </div>
+        ) : null}
 
-          <form className="composer panel" onSubmit={submit}>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Ask your tutor… (Enter to send)"
-              rows={3}
-              disabled={busy || !readyDocs.length}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-            />
-            <div className="composer-actions">
-              <button type="submit" className="btn btn-primary" disabled={busy || !readyDocs.length}>
-                Send
-              </button>
-              {mode === 'flashcards' && lastFlashcards?.length ? (
-                <>
-                  <button type="button" className="btn btn-ghost" onClick={handleEmailFlashcards}>
-                    Email last flashcards
-                  </button>
-                  {me?.is_admin && scopeType === 'document' && docId ? (
-                    <button type="button" className="btn btn-ghost" onClick={handleBroadcastFlashcards}>
-                      Send to subscribers
+        {mode === 'flashcards' && Array.isArray(structured?.items) ? (
+          <div className="material-list">
+            {(structured!.items as FlashcardItem[]).map((item, i) => (
+              <div key={i} className="material-card">
+                <p className="material-q">{item.front}</p>
+                <p className="material-a">{item.back}</p>
+                <div className="cite-row">
+                  {extractPages((item.citations || []).join(' ')).map((p) => (
+                    <button key={p} type="button" className="post-chip" onClick={() => openPage(p)}>
+                      p{p}
                     </button>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-            {error && <p className="login-error">{error}</p>}
-          </form>
-        </div>
-
-        <div className="study-col">
-          <div className="panel">
-            <p className="section-label">Sources</p>
-            <div className="sources-list">
-              {sources.length === 0 && <p className="empty">Retrieved excerpts appear here.</p>}
-              {sources.map((s, i) => (
-                <div
-                  key={i}
-                  className="source-item"
-                  onClick={() => openPdf(s.document_id, s.page_number)}
-                  onKeyDown={(e) => e.key === 'Enter' && openPdf(s.document_id, s.page_number)}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <div className="source-item-title">
-                    {s.document_title || 'Textbook'} · p{s.page_number}
-                  </div>
-                  <div className="source-excerpt">{s.text}</div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
+        ) : null}
 
-          <div className="panel pdf-panel">
-            <p className="section-label">Textbook PDF</p>
-            {scopeType === 'document' && (
-              <select
-                value={pdfDocId || ''}
-                onChange={(e) => {
-                  setPdfDocId(e.target.value);
-                  setPdfPage(1);
-                }}
-                style={{ marginBottom: '0.5rem', width: '100%', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '0.4rem' }}
-              >
-                {readyDocs.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.title}
-                  </option>
-                ))}
-              </select>
-            )}
-            <PdfViewer documentId={pdfDocId} page={pdfPage} onPageChange={setPdfPage} />
+        {mode === 'summary' && structured ? (
+          <div className="material-card summary-card">
+            <h2>{String(structured.title || 'Summary')}</h2>
+            {((structured.outline as { heading: string; bullets: string[] }[]) || []).map((sec, i) => (
+              <div key={i} className="summary-sec">
+                <h3>{sec.heading}</h3>
+                <ul>
+                  {sec.bullets?.map((b, j) => (
+                    <li key={j}>{b}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
-        </div>
+        ) : null}
+
+        {!structured && !busy ? (
+          <p className="muted pad">Choose a chapter and hit Generate.</p>
+        ) : null}
       </div>
+
+      {pdfDocId && (
+        <div className="pdf-dock">
+          <div className="pdf-modal-bar">
+            <span>Source PDF · p{pdfPage}</span>
+            <button type="button" className="btn-ghost" onClick={() => setPdfDocId(null)}>
+              Hide
+            </button>
+          </div>
+          <PdfViewer documentId={pdfDocId} page={pdfPage} />
+        </div>
+      )}
     </div>
   );
 }

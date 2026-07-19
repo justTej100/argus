@@ -1,21 +1,20 @@
-# Argus Study Buddy
+# Argus
 
-Personal textbook RAG app: upload PDFs, ask questions, get tutor-style answers with **page citations** (`[p12]`). Google sign-in for anyone (guests are rate-limited); admin accounts get full upload/chat access.
+Personal textbook social feed: doomscroll chapter personas, open cited PDF pages, generate chapter study packs (quiz / flashcards / summary) in-app or by email. Google sign-in; admins upload textbooks.
 
-**Stack:** FastAPI backend · React frontend · LangChain RAG · Gemini · Supabase Postgres + Storage
+**Stack:** FastAPI · React/Vite · LangChain + Gemini · Supabase Postgres (pgvector) + Storage
 
 ---
 
 ## What it does
 
-1. **Sign in** with Google (any account; `ADMIN_EMAIL` gets full access)
-2. **Upload** PDF textbooks (admin) → background ingestion extracts text, chunks by page, embeds with Gemini
-3. **Study** in chat, quiz, flashcard, or summary mode — answers cite textbook pages (guests: cooldown + daily chat cap)
-4. **Flashcard signup** — admin opens a textbook for signup; guests subscribe/unsubscribe; admin can email a deck to all subscribers
-5. **View** the PDF in-panel; citation chips jump to the right page
-6. **Inspect** the database on `/admin` (admins only)
+1. **Sign in** with Google (login page is the landing)
+2. **Home feed** — Twitter-style doomscroll of textbook chapter accounts + seeded LeetCode accounts; open exact PDF pages from posts
+3. **Upload** PDFs (admin) → junk-filtered chunking with **page + chapter** metadata → batched Gemini embeddings (pauses ~24h on rate limit, then resumes)
+4. **Study** — pick textbook + chapter/section → generate quiz / flashcards / summary → view in-app and optionally email (guests rate-limited)
+5. **Library / Admin** — manage textbooks and inspect vectors
 
-Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.page` on each chunk.
+Citations stay **page-level** (`[pN]`).
 
 ---
 
@@ -23,39 +22,24 @@ Citations are **page-level** (`[pN]`), driven by LangChain `Document.metadata.pa
 
 ```
 argus/
-├── main.py                 # FastAPI app: API routes + serves React build
-├── auth.py                 # Google OAuth + signed session cookies (admin vs guest)
-├── rate_limit.py           # Guest chat cooldown + daily cap
-├── citations.py            # [pN] parsing, validation, email link helpers
-├── storage.py              # PDF files: Supabase Storage or local disk
-├── jobs.py                 # In-process background ingestion (no Redis)
-├── Makefile
-├── requirements.txt
-│
-├── frontend/               # React + Vite UI (Library, Study, Admin, Login)
-│   └── src/
-│       ├── api.ts          # fetch wrappers for backend routes
-│       ├── pages/          # LibraryPage, StudyPage, AdminPage, LoginPage
-│       └── components/     # PdfViewer, ConfirmDeleteModal, …
-│
+├── main.py                 # FastAPI: API + React SPA
+├── auth.py                 # Google OAuth + session cookies
+├── rate_limit.py           # Guest study generation cooldown + daily cap
+├── citations.py            # [pN] helpers
+├── storage.py / jobs.py
+├── frontend/               # React shell: left rail · feed · right news
 ├── agents/
-│   ├── Pipeline.py         # Orchestrates LangChain RAG + citation eval
-│   ├── IngestionAgent.py   # PDF → page text → LangChain chunks → vector store
-│   └── EvalAgent.py        # Checks answers are prose + page refs are valid
-│
+│   ├── Pipeline.py         # Study RAG + EvalAgent
+│   ├── IngestionAgent.py   # PDF → filter → sections → embed (resumable)
+│   ├── FeedAgent.py        # Chapter personas + LeetCode seed posts
+│   └── EvalAgent.py
 ├── ai/
-│   ├── langchain_rag.py    # Page splitting + prompt formatting (metadata blocks)
-│   ├── langchain_store.py  # PGVectorStore table `argus_vectors`
-│   ├── langchain_chain.py  # LCEL retrieve → Gemini chat / JSON modes
-│   ├── langchain_embeddings.py
-│   ├── langchain_llm.py
-│   └── clients.py          # Low-level Gemini HTTP (retries, batch embed for tests)
-│
-├── db/
-│   ├── client.py           # `documents` table CRUD + scope resolution
-│   └── schema.sql          # Postgres schema (vectors managed by LangChain)
-│
-├── mail/gmail.py           # Optional flashcard email via Gmail SMTP
+│   ├── chunking.py         # Junk filter, chapters, split, prompt format
+│   ├── vector_store.py     # PGVectorStore + batched embed resume
+│   ├── study_generate.py   # quiz / flashcards / summary
+│   ├── embeddings.py / llm.py / clients.py
+├── db/                     # documents, sections, accounts, posts, schema
+├── mail/gmail.py           # Study pack email
 └── tests/
 ```
 
@@ -64,30 +48,29 @@ argus/
 ## Architecture
 
 ```text
-Browser (React)
+Browser (React three-column shell)
     │  session cookie
     ▼
 FastAPI (main.py)
-    ├── /auth/google          Google OAuth
-    ├── /documents            upload, list, delete PDFs
-    ├── /chat                 LangChain RAG pipeline
-    ├── /admin/*              DB stats (read-only)
-    └── /*                    React SPA (frontend/dist)
+    ├── /feed /news           Persona posts + right-rail status
+    ├── /documents            PDFs + /sections
+    ├── /study                Chapter-scoped study packs
+    ├── /admin/*              DB stats
+    └── /*                    SPA
 
-Upload flow:
-  PDF → storage.py (Supabase or local)
-      → IngestionAgent (pymupdf4llm extract)
-      → langchain_rag.split_pages_to_chunks (metadata: page, title, course)
-      → langchain_store → argus_vectors (PGVectorStore)
+Upload:
+  PDF → extract → junk filter → document_sections
+      → chunking (page + chapter metadata)
+      → vector_store batches → argus_vectors
+      → on 429: embedding_paused + resume ~24h
+      → ready → FeedAgent chapter posts
 
-Question flow:
-  query → langchain_store.similarity_search (scoped by textbook)
-        → langchain_chain (Gemini tutor prompt)
-        → EvalAgent (citation check)
-        → JSON response → React UI
+Study:
+  document + section → scoped similarity_search
+      → study_generate (JSON) → EvalAgent → UI / email
 ```
 
-**No Redis, no separate worker.** Ingestion runs as a background task in the same process.
+**No Redis.** Ingestion + embed resume run in-process.
 
 ---
 
@@ -104,7 +87,7 @@ make install          # Python venv + pip
 make app              # builds React + starts http://localhost:8000
 ```
 
-Open http://localhost:8000 → **Sign in with Google** → upload a PDF on **Library** → wait for status **ready** → **Study**.
+Open http://localhost:8000 → **Sign in with Google** → feed home → upload on **Library** → wait until **ready** → posts appear; use **Study** for chapter packs.
 
 ### Development (hot reload UI)
 
@@ -130,9 +113,9 @@ Copy `.env.example` to `.env`. Full key setup is below.
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `SECRET_KEY` | Yes | Signs session cookies |
-| `ADMIN_EMAIL` | Yes | Admin Google account(s) — unlimited chat, upload/delete, `/admin` |
-| `GUEST_CHAT_COOLDOWN_SECONDS` | Optional | Guest min seconds between chats (default `300`) |
-| `GUEST_CHAT_DAILY_LIMIT` | Optional | Guest max chats per UTC day (default `10`) |
+| `ADMIN_EMAIL` | Yes | Admin Google account(s) — unlimited study, upload/delete, `/admin` |
+| `GUEST_STUDY_COOLDOWN_SECONDS` | Optional | Guest min seconds between study generations (default `300`) |
+| `GUEST_STUDY_DAILY_LIMIT` | Optional | Guest max study generations per UTC day (default `10`) |
 | `GOOGLE_CLIENT_ID` | Yes | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | Yes | Google OAuth secret |
 | `GOOGLE_REDIRECT_URI` | Yes | `http://localhost:8000/auth/google/callback` (local) |
@@ -143,7 +126,7 @@ Copy `.env.example` to `.env`. Full key setup is below.
 | `STORAGE_BACKEND` | Optional | `local` (dev) or `supabase` (prod; default when `ENVIRONMENT=production`) |
 | `SUPABASE_BUCKET` | Optional | Storage bucket name (default `argus-pdfs`) |
 | `ENVIRONMENT` | Optional | `production` → secure cookies + supabase storage default |
-| `GEMINI_MODEL` | Optional | Chat model (default `gemini-2.5-flash`) |
+| `GEMINI_MODEL` | Optional | Study LLM (default `gemini-2.5-flash`) |
 | `GMAIL_USER` / `GMAIL_APP_PASSWORD` | Optional | Email flashcards to yourself |
 | `APP_BASE_URL` | Optional | Base URL in email citation links |
 
@@ -163,7 +146,7 @@ openssl rand -hex 32
 
 ### `ADMIN_EMAIL`
 
-Admin Google address(es) with full access (upload, delete, database page, unlimited chat). **Anyone** can sign in with Google as a guest; guests are rate-limited on chat.
+Admin Google address(es) with full access (upload, delete, database page, unlimited study). **Anyone** can sign in with Google as a guest; guests are rate-limited on study generation.
 
 ```env
 ADMIN_EMAIL=you@gmail.com
@@ -171,7 +154,7 @@ ADMIN_EMAIL=you@gmail.com
 
 Multiple admins: `you@gmail.com,partner@gmail.com`
 
-Guest defaults: 1 chat every 5 minutes and 10 chats/day (`GUEST_CHAT_COOLDOWN_SECONDS`, `GUEST_CHAT_DAILY_LIMIT`).
+Guest defaults: 1 study generation every 5 minutes and 10/day (`GUEST_STUDY_COOLDOWN_SECONDS`, `GUEST_STUDY_DAILY_LIMIT`).
 
 ### Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`)
 
@@ -191,10 +174,10 @@ Guest defaults: 1 chat every 5 minutes and 10 chats/day (`GUEST_CHAT_COOLDOWN_SE
 3. Paste into `.env` as `GEMINI_API_KEY`
 
 Used for:
-- **Embeddings** — `models/gemini-embedding-001` at 3072 dimensions (LangChain)
-- **Chat** — `gemini-2.5-flash` by default (override with `GEMINI_MODEL`)
+- **Embeddings** — `models/gemini-embedding-001` at 3072 dimensions (batched; pauses ~24h on sustained 429)
+- **Study generation** — `gemini-2.5-flash` by default (override with `GEMINI_MODEL`)
 
-Free tier has daily limits; if chat fails with 429, wait or switch models in `.env`.
+Free tier has daily limits; embedding jobs resume automatically after a pause.
 
 ### Supabase (database + PDF storage)
 
@@ -249,7 +232,7 @@ SUPABASE_BUCKET=argus-pdfs
 1. Use a Gmail account → [Google App Passwords](https://myaccount.google.com/apppasswords) (requires 2FA)
 2. Create an app password for “Mail”
 3. Set `GMAIL_USER=you@gmail.com` and `GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx`
-4. In Study mode, generate flashcards and check **Email flashcards** or use **Email last flashcards**
+4. In Study, pick a chapter, generate quiz/flashcards/summary, check **Email me**
 
 ---
 
@@ -273,14 +256,17 @@ SUPABASE_BUCKET=argus-pdfs
 | GET | `/health` | No | Health check |
 | GET | `/auth/google` | No | Start OAuth |
 | GET | `/logout` | No | Clear session |
-| GET | `/me` | Yes | Email, `is_admin`, chat quota |
+| GET | `/me` | Yes | Email, `is_admin`, study quota |
+| GET | `/feed` | Yes | Persona posts (newest first) |
+| GET | `/news` | Yes | Right-rail status cards |
 | GET | `/documents` | Yes | List textbooks |
 | POST | `/documents` | Admin | Upload PDF |
-| GET | `/documents/{id}/status` | Yes | Ingestion status |
+| GET | `/documents/{id}/status` | Yes | Ingestion / embed status |
+| GET | `/documents/{id}/sections` | Yes | Chapters for Study picker |
 | GET | `/documents/{id}/file` | Yes | PDF bytes (viewer) |
 | DELETE | `/documents/{id}` | Admin | Delete one book |
 | POST | `/documents/bulk-delete` | Admin | Delete many |
-| POST | `/chat` | Yes | Ask question (RAG; guests rate-limited) |
+| POST | `/study` | Yes | Chapter quiz/flashcards/summary (+ optional email) |
 | GET | `/flashcards/offers` | Yes | Textbooks open for flashcard signup |
 | POST | `/flashcards/subscribe` | Yes | Subscribe to a textbook's flashcards |
 | POST | `/flashcards/unsubscribe` | Yes | Unsubscribe |
@@ -290,7 +276,7 @@ SUPABASE_BUCKET=argus-pdfs
 | GET | `/admin/stats` | Admin | Document + vector counts |
 | GET | `/admin/documents/{id}/chunks` | Admin | Sample chunks |
 
-React pages: `/login`, `/` (library), `/study`, `/admin`
+React pages: `/login`, `/` (feed), `/library`, `/study`, `/admin`
 
 ---
 
@@ -323,7 +309,7 @@ After deploy, **re-upload textbooks** if migrating from an older schema so vecto
 | 401 on Study/Library | Sign in again; check `SECRET_KEY` did not change mid-session |
 | Upload fails (storage) | Use `SUPABASE_SERVICE_KEY`, not publishable key; set `STORAGE_BACKEND=supabase` |
 | Stuck on `processing` | Check terminal logs; usually `GEMINI_API_KEY` or PDF extract failure |
-| Chat 429 / 503 | Gemini quota or outage; retry or change `GEMINI_MODEL` |
+| Study / embed 429 | Gemini quota; study: wait for guest cooldown; embed: auto-resumes ~24h |
 | DB connection error | URL-encode password in `DATABASE_URL`; wake paused Supabase project; copy a **fresh** URI from Dashboard → Database (error `tenant/user … not found` = wrong/old project ref). App falls back to in-memory if Postgres is unreachable. |
 | Blank UI | Run `make frontend` before `make app`; need `frontend/dist` |
 | Old books have no answers | Re-upload after LangChain migration — chunks live in `argus_vectors` |

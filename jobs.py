@@ -8,9 +8,9 @@ from agents.IngestionAgent import ingest_document
 from db.client import update_document_status
 
 
-async def _run_ingestion(document_id: str, storage_path: str) -> None:
+async def _run_ingestion(document_id: str, storage_path: str, *, resume: bool = False) -> None:
     try:
-        await ingest_document(document_id, storage_path)
+        await ingest_document(document_id, storage_path, resume=resume)
     except Exception as exc:
         await update_document_status(
             document_id,
@@ -19,7 +19,7 @@ async def _run_ingestion(document_id: str, storage_path: str) -> None:
         )
 
 
-def schedule_ingestion(document_id: str, storage_path: str) -> str:
+def schedule_ingestion(document_id: str, storage_path: str, *, resume: bool = False) -> str:
     """Start PDF ingestion in the background and return a local task id."""
-    asyncio.create_task(_run_ingestion(document_id, storage_path))
+    asyncio.create_task(_run_ingestion(document_id, storage_path, resume=resume))
     return f'ingest-{document_id}'

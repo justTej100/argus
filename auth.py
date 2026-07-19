@@ -3,7 +3,7 @@ from __future__ import annotations
 """Session-cookie authentication helpers.
 
 Google OAuth accepts any signed-in Google account. ADMIN_EMAIL (comma-separated)
-marks admin users who get unlimited chat and mutation/admin routes.
+marks admin users who get unlimited study generation and mutation/admin routes.
 """
 
 import os

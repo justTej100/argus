@@ -1,9 +1,17 @@
 /**
  * HTTP client for the FastAPI backend.
- * All requests use credentials: 'include' for session cookies.
- * Dev: Vite proxies /auth, /documents, /chat, /admin, /me to localhost:8000.
+ * Dev: Vite proxies /auth, /documents, /study, /feed, /admin, /me to localhost:8000.
  */
-import type { ChatMessage, Document, MeResponse, Scope, Source, StudyMode, StudyResponse } from './types';
+import type {
+  Document,
+  DocumentSection,
+  FeedPost,
+  MeResponse,
+  NewsItem,
+  Source,
+  StudyMode,
+  StudyResponse,
+} from './types';
 import type { FlashcardOffer } from './types';
 
 export type { MeResponse, FlashcardOffer };
@@ -18,7 +26,7 @@ function formatDetail(detail: unknown, fallback: string): string {
       const parts = [obj.message];
       if (typeof obj.retry_after_seconds === 'number' && obj.retry_after_seconds > 0) {
         const mins = Math.ceil(obj.retry_after_seconds / 60);
-        parts.push(`Next chat in ~${mins} min.`);
+        parts.push(`Next study in ~${mins} min.`);
       }
       if (typeof obj.remaining_today === 'number') {
         parts.push(`${obj.remaining_today} left today.`);
@@ -50,7 +58,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** Session check via /me — 401 means logged out. */
 export async function isAuthenticated(): Promise<boolean> {
   const res = await fetch('/me', { credentials: 'include' });
   return res.status === 200;
@@ -62,6 +69,10 @@ export function getMe(): Promise<MeResponse> {
 
 export function listDocuments(): Promise<Document[]> {
   return request<Document[]>('/documents');
+}
+
+export function listSections(documentId: string): Promise<DocumentSection[]> {
+  return request<DocumentSection[]>(`/documents/${encodeURIComponent(documentId)}/sections`);
 }
 
 export function getDocumentStatus(id: string): Promise<Document & { error_message?: string }> {
@@ -97,19 +108,29 @@ export function bulkDeleteDocuments(ids: string[]): Promise<{ deleted: number }>
   });
 }
 
-export function chat(
-  messages: ChatMessage[],
+export function getFeed(limit = 40, cursor?: string): Promise<{ posts: FeedPost[] }> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (cursor) q.set('cursor', cursor);
+  return request<{ posts: FeedPost[] }>(`/feed?${q}`);
+}
+
+export function getNews(): Promise<{ items: NewsItem[] }> {
+  return request<{ items: NewsItem[] }>('/news');
+}
+
+export function study(
+  documentId: string,
   mode: StudyMode,
-  scope: Scope,
-  emailFlashcards = false,
+  sectionId: string | null,
+  email = false,
 ): Promise<StudyResponse> {
-  return request<StudyResponse>('/chat', {
+  return request<StudyResponse>('/study', {
     method: 'POST',
     body: JSON.stringify({
-      messages,
+      document_id: documentId,
+      section_id: sectionId,
       mode,
-      scope,
-      email_flashcards: emailFlashcards,
+      email,
     }),
   });
 }
@@ -185,7 +206,10 @@ export function getAdminStats(): Promise<AdminStats> {
   return request('/admin/stats');
 }
 
-export function getAdminChunks(documentId: string, limit = 5): Promise<{ chunks: { text: string; page_number: number; metadata: Record<string, unknown> }[] }> {
+export function getAdminChunks(
+  documentId: string,
+  limit = 5,
+): Promise<{ chunks: { text: string; page_number: number; metadata: Record<string, unknown> }[] }> {
   return request(`/admin/documents/${encodeURIComponent(documentId)}/chunks?limit=${limit}`);
 }
 

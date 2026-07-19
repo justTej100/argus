@@ -2,15 +2,15 @@ from __future__ import annotations
 
 """Study pipeline orchestrator.
 
-Wires langchain_chain.run_study_chain() to EvalAgent citation checks and
+Wires ai.study_generate.run_study_chain() to EvalAgent citation checks and
 formats sources for the React UI (including metadata dict per chunk).
 """
 
 from dataclasses import dataclass
 from typing import Any
 
-from ai.langchain_chain import run_study_chain
-from ai.langchain_rag import chunk_metadata
+from ai.chunking import chunk_metadata
+from ai.study_generate import run_study_chain
 from agents.EvalAgent import EvalAgent, EvalResult
 
 
@@ -26,7 +26,7 @@ class PipelineResult:
 
 
 class ResearchPipeline:
-    """Coordinate LangChain RAG retrieval, synthesis, and eval."""
+    """Coordinate RAG retrieval, study synthesis, and eval."""
 
     def __init__(self) -> None:
         self.eval_agent = EvalAgent()
@@ -35,15 +35,21 @@ class ResearchPipeline:
         self,
         query: str,
         query_type: str = 'study',
-        conversation_history: list[dict] | None = None,
-        scope: dict | None = None,
-        mode: str = 'chat',
+        *,
+        document_id: str,
+        mode: str = 'quiz',
+        start_page: int | None = None,
+        end_page: int | None = None,
+        chapter_title: str = '',
+        section_id: str | None = None,
     ) -> PipelineResult:
         chain_result = await run_study_chain(
             query=query,
-            scope=scope,
+            document_id=document_id,
             mode=mode,
-            conversation_history=conversation_history,
+            start_page=start_page,
+            end_page=end_page,
+            chapter_title=chapter_title,
         )
 
         eval_result = await self.eval_agent.run_on_chunks(
@@ -58,6 +64,7 @@ class ResearchPipeline:
                 'document_title': chunk['document_title'],
                 'description': chunk.get('description'),
                 'page_number': chunk['page_number'],
+                'chapter': chunk.get('chapter') or '',
                 'sentence_start_idx': 0,
                 'sentence_end_idx': 0,
                 'text': chunk['text'],
@@ -77,9 +84,12 @@ class ResearchPipeline:
             meta={
                 'provider': chain_result.provider,
                 'model': chain_result.model_used,
-                'scope': scope or {'type': 'library'},
                 'mode': mode,
-                'documents_in_scope': len({c['document_id'] for c in chain_result.chunks}),
+                'document_id': document_id,
+                'section_id': section_id,
+                'chapter': chapter_title,
+                'start_page': start_page,
+                'end_page': end_page,
                 'chunks_in_context': len(chain_result.chunks),
             },
         )
