@@ -1,5 +1,7 @@
 # Argus
 
+#TODO
+- add a feat that looks up professional videos related to textbook concepts --> if LA then show LA lectures
 Personal textbook social feed: doomscroll chapter personas, open cited PDF pages, generate chapter study packs (quiz / flashcards / summary) in-app or by email. Google sign-in; admins upload textbooks.
 
 **Stack:** FastAPI · React/Vite · LangChain + Gemini · Supabase Postgres (pgvector) + Storage
